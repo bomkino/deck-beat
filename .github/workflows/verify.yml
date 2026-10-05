@@ -1,0 +1,42 @@
+# Builds Deck Beat and beat-lab on an Apple silicon runner with Xcode, for each
+# push, each pull request from a fork and on demand, then runs beat-lab's CPU
+# checks and renders its contact sheet and demo clip, kept as the deck-beat-lab
+# artifact. The render needs Metal; on a runner without it beat-lab says
+# "skipped:" and passes. The headless still checks in scripts/verify.sh need a
+# Mac with a GPU and a screen session; run them locally before a release.
+name: verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # A pull request from a branch of this repository is already built by its push.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show the toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Build Deck Beat
+        run: swift build -c release --product DeckBeat
+      - name: Build beat-lab
+        run: swift build -c release --product beat-lab
+      - name: Run the beat-lab checks
+        run: |
+          "$(swift build -c release --show-bin-path)/beat-lab" check
+      - name: Render the contact sheet and demo clip
+        run: |
+          "$(swift build -c release --show-bin-path)/beat-lab" render --out lab-output
+      - name: Keep the renders
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deck-beat-lab
+          path: lab-output
+          if-no-files-found: ignore
