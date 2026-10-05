@@ -43,7 +43,7 @@ jobs:
           perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still.png --look ripple --format reel --time 2
           # The whole window, inspector and transport included, once it has settled,
           # and the screen as the runner shows it, which also catches glass and vibrancy.
-          perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1000x700 --time 2 --settle 10 > "$RUNNER_TEMP/app.log" 2>&1 &
+          perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1220x720 --time 2 --settle 10 > "$RUNNER_TEMP/app.log" 2>&1 &
           for i in $(seq 1 120); do grep -q "snapshot: ready" "$RUNNER_TEMP/app.log" && break; sleep 1; done
           sleep 4
           screencapture -x lab-output/app-screen.png || echo "screencapture: not allowed on this runner"

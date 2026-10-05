@@ -86,7 +86,9 @@ struct BeatWindow: View {
             session.receive(urls.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending })
             return !urls.isEmpty
         }
-        .frame(minWidth: 1040, minHeight: 680)
+        // Room for the sidebar, the inspector and the stage with its toolbar at
+        // their minimum widths; any narrower and the side columns get clipped.
+        .frame(minWidth: 1220, minHeight: 680)
     }
 }
 
