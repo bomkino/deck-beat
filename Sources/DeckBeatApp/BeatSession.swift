@@ -43,7 +43,7 @@ final class BeatSession: StageSource {
     /// A plan and what goes with it, for one canvas.
     struct Planned {
         var clip: ClipRange
-        var layout: GridLayout
+        var layout: BeatKit.GridLayout
         var plan: BeatPlan
         var modulate: @Sendable (Double, inout StageLook, inout BackdropSettings) -> Void
     }
@@ -280,7 +280,7 @@ final class BeatSession: StageSource {
                 do { loaded = try await Song.load(url) } catch { failure = error.localizedDescription }
             }
             let result = loaded ?? Song.demo()
-            await MainActor.run {
+            await MainActor.run { [failure] in
                 // A newer choice may have arrived while this one decoded.
                 guard self.project.song == file else { return }
                 self.song = result
@@ -386,7 +386,7 @@ final class BeatSession: StageSource {
                 items.append(MediaItem(name: DemoDeck.titles[i], file: file, kind: .image,
                                        aspect: Float(DemoDeck.width) / Float(DemoDeck.height), focal: SIMD2(0.5, 0.45)))
             }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [items] in
                 guard let self else { return }
                 self.preparingSamples = false
                 guard self.project.slides.isEmpty else { return }
@@ -485,8 +485,8 @@ final class BeatSession: StageSource {
     }
 
     func fitDeck() {
-        let f = GridLayout.fit(count: project.slides.count, aspect: Float(project.format.aspect), slideAspect: slideAspect,
-                               base: project.settings.grid)
+        let f = BeatKit.GridLayout.fit(count: project.slides.count, aspect: Float(project.format.aspect), slideAspect: slideAspect,
+                                       base: project.settings.grid)
         update("Fit the Grid") { p in
             p.settings.grid.columns = f.columns
             p.settings.grid.rows = f.rows

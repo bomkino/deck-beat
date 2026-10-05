@@ -1,3 +1,4 @@
+import AppKit
 import BeatKit
 import StudioKit
 import SwiftUI
@@ -8,7 +9,11 @@ struct DeckBeatApp: App {
     @NSApplicationDelegateAdaptor(StudioAppDelegate.self) private var delegate
 
     init() {
-        UserDefaults.standard.register(defaults: ["appearance": AppearanceChoice.dark.rawValue])
+        UserDefaults.standard.register(defaults: [
+            "appearance": AppearanceChoice.dark.rawValue,
+            // Open on a new window, ready to go, rather than on the Open panel.
+            "NSShowAppCentricOpenPanelInsteadOfUntitledFile": false,
+        ])
         DispatchQueue.global(qos: .utility).async {
             if let r = try? StageRenderer() { r.warmUp() }
         }

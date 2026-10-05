@@ -107,8 +107,9 @@ struct ClipTimeline: View {
             let clip = planned.clip
             let slots = song.outline.count
             if slots > 1, song.duration > 0 {
-                let a = Int(clip.start / song.duration * Double(slots)), b = Int((clip.start + clip.length) / song.duration * Double(slots))
-                outline = Array(song.outline[max(0, a)..<min(slots, max(a + 1, b))])
+                let a = min(max(0, Int(clip.start / song.duration * Double(slots))), slots - 1)
+                let b = min(slots, max(a + 1, Int((clip.start + clip.length) / song.duration * Double(slots))))
+                outline = Array(song.outline[a..<b])
             }
             downbeats = plan.downbeats.filter { $0 >= 0 && $0 <= length }
             beats = plan.beats.filter { $0 >= 0 && $0 <= length }
