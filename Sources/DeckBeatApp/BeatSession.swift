@@ -327,7 +327,7 @@ final class BeatSession: StageSource {
             let base = url.deletingPathExtension().lastPathComponent
             for e in entries {
                 let name = entries.count > 1 ? "\(base) · \(e.page + 1)" : base
-                added.append(MediaItem(name: name, file: stored, kind: e.kind, page: e.page, aspect: 16.0 / 9.0, focal: SIMD2(0.5, 0.45)))
+                added.append(MediaItem(name: name, file: stored, kind: e.kind, page: e.page, aspect: 16.0 / 9.0, focal: BeatScene.defaultFocal))
             }
         }
         guard !added.isEmpty else {
@@ -384,7 +384,7 @@ final class BeatSession: StageSource {
                 let file = MediaItem.samplePrefix + UUID().uuidString + ".png"
                 try? store.write(data, as: file)
                 items.append(MediaItem(name: DemoDeck.titles[i], file: file, kind: .image,
-                                       aspect: Float(DemoDeck.width) / Float(DemoDeck.height), focal: SIMD2(0.5, 0.45)))
+                                       aspect: Float(DemoDeck.width) / Float(DemoDeck.height), focal: BeatScene.defaultFocal))
             }
             DispatchQueue.main.async { [items] in
                 guard let self else { return }

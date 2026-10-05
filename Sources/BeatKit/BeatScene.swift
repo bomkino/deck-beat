@@ -27,7 +27,11 @@ public struct BeatScene: StageScene {
         self.focals = focals
     }
 
-    func focal(_ slide: Int) -> SIMD2<Float> { slide < focals.count ? focals[slide] : SIMD2(0.5, 0.45) }
+    /// Where a filled cell crops a slide: left of centre, where a deck's titles
+    /// start, and a little above the middle.
+    public static let defaultFocal = SIMD2<Float>(0.38, 0.45)
+
+    func focal(_ slide: Int) -> SIMD2<Float> { slide < focals.count ? focals[slide] : Self.defaultFocal }
 
     public func loopDuration(_ ctx: SceneContext) -> Double { plan.length }
     public func soundEvents(_ ctx: SceneContext) -> [SoundEvent] { [] }

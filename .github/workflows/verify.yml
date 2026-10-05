@@ -41,12 +41,19 @@ jobs:
           mkdir -p lab-output
           # A new window with the sample deck and demo groove, rendered through the app's own session.
           perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still.png --look ripple --format reel --time 2
-          # The whole window, inspector and transport included, once it has settled.
-          perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --time 2 --settle 3
-          # A small copy of the window in the log, for reviewers who can't download the artifact.
-          sips -s format jpeg -s formatOptions 70 -Z 1200 lab-output/app-window.png --out "$RUNNER_TEMP/window.jpg" >/dev/null
-          echo "thumbnail: app-window.jpg"
-          base64 -b 1000 -i "$RUNNER_TEMP/window.jpg" | sed 's/^/b64w /'
+          # The whole window, inspector and transport included, once it has settled,
+          # and the screen as the runner shows it, which also catches glass and vibrancy.
+          perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --time 2 --settle 12 &
+          sleep 9
+          screencapture -x lab-output/app-screen.png || echo "screencapture: not allowed on this runner"
+          wait
+          # Small copies in the log, for reviewers who can't download the artifact.
+          for f in app-window app-screen; do
+            [ -s "lab-output/$f.png" ] || continue
+            sips -s format jpeg -s formatOptions 70 -Z 1200 "lab-output/$f.png" --out "$RUNNER_TEMP/$f.jpg" >/dev/null
+            echo "thumbnail: $f.jpg"
+            base64 -b 1000 -i "$RUNNER_TEMP/$f.jpg" | sed "s/^/b64-$f /"
+          done
       - name: Keep the renders
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
