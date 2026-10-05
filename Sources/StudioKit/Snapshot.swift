@@ -287,7 +287,7 @@ public enum StudioSnapshot {
         exit(0)
     }
 
-    static func sizeWindow() {
+    public static func sizeWindow() {
         for w in NSApp.windows where w.isVisible && w.frame.width > 400 {
             w.setContentSize(size)
             w.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)

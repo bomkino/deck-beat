@@ -332,6 +332,7 @@ struct BeatSnapshotHost: ViewModifier {
         if let c = StudioSnapshot.arg("--clip").flatMap(Int.init).flatMap(ClipLength.init(rawValue:)) { session.setClip(c) }
         session.clock.playing = false
         session.clock.time = Double(StudioSnapshot.arg("--time") ?? "") ?? 3
+        StudioSnapshot.sizeWindow()
         let f = session.project.format
         if let comp = session.composition() {
             still = try? Exporter().still(comp, at: session.clock.time, width: f.width, height: f.height, samples: 4)
@@ -345,6 +346,9 @@ struct BeatSnapshotHost: ViewModifier {
             print("still \(path) \(still.width)x\(still.height)")
             exit(0)
         }
+        // A screen capture can start from here.
+        print("snapshot: ready")
+        fflush(stdout)
         DispatchQueue.main.asyncAfter(deadline: .now() + (Double(StudioSnapshot.arg("--settle") ?? "") ?? 3)) {
             MainActor.assumeIsolated { StudioSnapshot.captureWindow() }
         }
