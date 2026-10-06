@@ -948,7 +948,7 @@ public struct BeatScene: StageScene {
 
     /// How much larger the resting camera shows something `z` in front of the
     /// canvas than the same thing on it.
-    static func seen(_ z: Float) -> Float {
+    public static func seen(_ z: Float) -> Float {
         let d = GridLayout.eyeDistance
         return d / max(d - z, 0.2)
     }
