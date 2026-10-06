@@ -485,10 +485,12 @@ public struct TransportBar: View {
 
 /// Where platform interface covers a vertical video. Shown on the stage only;
 /// never exported. Insets as recorded by Drift's platform guides (checked 23 Aug 2026).
-struct SafeAreaGuides: View {
+public struct SafeAreaGuides: View {
     let format: CanvasFormat
 
-    var body: some View {
+    public init(format: CanvasFormat) { self.format = format }
+
+    public var body: some View {
         GeometryReader { g in
             let w = g.size.width, h = g.size.height
             if format.id == "reel" || format.id == "portrait" {

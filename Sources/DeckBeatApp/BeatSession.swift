@@ -78,11 +78,19 @@ final class BeatSession: StageSource {
         self.document = document
         project = document.project
         clock.duration = 30
+        if document.fromNewerVersion {
+            message = "This project was made with a newer Deck Beat. It opens with what this version knows, and won't be saved over; choose File › Duplicate to keep changes."
+        }
     }
 
     /// Loads the song and the slides once the window is up, and fills an empty
     /// project with the sample deck so it plays straight away.
     func start() {
+        // A new window starts on the first starter song (headless runs keep the demo groove unless asked).
+        if project.slides.isEmpty, project.song == nil {
+            let pick = StudioSnapshot.isRequested ? StudioSnapshot.arg("--song").flatMap(Int.init).map { $0 - 1 } : 0
+            if let i = pick, StarterSong.all.indices.contains(i) { useStarterSong(StarterSong.all[i], undoable: false) }
+        }
         if song == nil, !songLoading { loadSong() }
         if project.slides.isEmpty { addStarterSlides() } else { loadMedia() }
     }
@@ -404,6 +412,7 @@ final class BeatSession: StageSource {
             lastSoundTime = nil
             return nil
         }
+        sound.muted = UserDefaults.standard.bool(forKey: "previewMuted")
         let loop = loopDuration
         // Restart when the sound changed or the playhead was moved by hand.
         let moved = lastSoundTime.map { abs(wrap(time - $0 + loop / 2, loop) - loop / 2) > 0.05 } ?? true
@@ -476,6 +485,27 @@ final class BeatSession: StageSource {
             p.beat = .none
         }
         clock.time = 0
+    }
+
+    /// Plays a song that comes with the app; it's copied into the project like any other.
+    func useStarterSong(_ starter: StarterSong, undoable: Bool = true) {
+        guard let url = starter.url, let stored = try? document.media.importFile(url) else {
+            message = "That starter song could not be found in the app."
+            return
+        }
+        let change: (inout BeatProject) -> Void = { p in
+            p.song = SongFile(file: stored, title: starter.title)
+            p.clip.bestPart = true
+            p.beat = .none
+        }
+        if undoable { update("Choose \(starter.title)", change) } else { live(change) }
+        clock.time = 0
+    }
+
+    /// The starter song playing now, if it is one.
+    var starterSong: StarterSong? {
+        guard let title = project.song?.title else { return nil }
+        return StarterSong.all.first { $0.title == title }
     }
 
     func useDemoSong() {

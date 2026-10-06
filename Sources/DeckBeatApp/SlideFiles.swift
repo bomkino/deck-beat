@@ -44,3 +44,22 @@ enum SlideFiles {
         }
     }
 }
+
+/// Songs that come with the app, free to use: each one CC0, with its source in docs/SONGS.md.
+struct StarterSong: Codable, Hashable, Identifiable {
+    var file: String
+    var title: String
+    var artist: String
+    /// A few words on how it feels, for the menu.
+    var mood: String
+
+    var id: String { file }
+    var url: URL? { StudioResources.url("Songs/" + file) }
+
+    /// The songs in Resources/Songs, in the order songs.json lists them; none if it's missing.
+    static let all: [StarterSong] = {
+        guard let url = StudioResources.url("Songs/songs.json"), let data = try? Data(contentsOf: url),
+              let songs = try? JSONDecoder().decode([StarterSong].self, from: data) else { return [] }
+        return songs.filter { $0.url != nil }
+    }()
+}

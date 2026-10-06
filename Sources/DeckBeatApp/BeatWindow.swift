@@ -101,6 +101,7 @@ struct BeatStage: View {
     let session: BeatSession
     let still: CGImage?
     @Environment(\.colorScheme) private var scheme
+    @AppStorage("showSafeAreas") private var showSafeAreas = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -137,6 +138,8 @@ struct BeatStage: View {
                         }
                     }
                     .frame(width: fitted.width, height: fitted.height)
+                    // Shown on the stage only, never exported.
+                    .overlay { if showSafeAreas { SafeAreaGuides(format: session.project.format) } }
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.stage, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.stage, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
                     .shadow(color: .black.opacity(scheme == .dark ? 0.55 : 0.18), radius: scheme == .dark ? 28 : 14, y: 4)
@@ -279,15 +282,32 @@ struct SongCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.song?.title ?? (session.songLoading ? "Listening…" : "No song")).textStyle(.label).lineLimit(1)
                     Text(detail).textStyle(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if let starter = session.starterSong {
+                        Text("\(starter.artist) · CC0, free to use").textStyle(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
             }
             HStack(spacing: 6) {
                 Button(session.project.song == nil ? "Choose Song…" : "Replace…") { BeatPanels.chooseSong(session) }
                     .buttonStyle(QuietButtonStyle())
-                if session.project.song != nil {
-                    Button("Demo Groove") { session.useDemoSong() }.buttonStyle(QuietButtonStyle())
+                Menu {
+                    Section("Free to use (CC0)") {
+                        ForEach(StarterSong.all) { s in
+                            Button { session.useStarterSong(s) } label: {
+                                Text(s.title + (session.starterSong == s ? "  ✓" : ""))
+                                Text("\(s.artist) · \(s.mood)")
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("Demo Groove" + (session.project.song == nil ? "  ✓" : "")) { session.useDemoSong() }
+                } label: {
+                    Text("Starter Songs").textStyle(.caption)
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Songs that come with Deck Beat, free to use in anything you make")
             }
             .padding(.leading, -8)
         }
