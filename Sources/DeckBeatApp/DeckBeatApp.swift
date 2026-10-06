@@ -88,6 +88,9 @@ struct BeatProject: Codable, Hashable {
     var beat = BeatFix.none
     /// Words over the video: a caption or a title card.
     var title: ReelTitle?
+    /// Exports leave the backdrop out where the format can (ProRes 4444, HEVC,
+    /// PNG); the stage shows a checkerboard in its place.
+    var transparent = false
 
     init(backdrop: BackdropSettings, stage: StageLook) {
         self.backdrop = backdrop
@@ -99,8 +102,13 @@ struct BeatProject: Codable, Hashable {
         var p = BeatProject(backdrop: look.backdrop(nil), stage: look.stage)
         p.settings = Looks.settings(look, over: BeatSettings())
         p.gridFollowsDeck = true
+        // New documents start the way the last one was set.
+        p.transparent = UserDefaults.standard.bool(forKey: BeatProject.transparentKey)
         return p
     }
+
+    /// Where the last Background choice is kept, as the start for new documents.
+    static let transparentKey = "background.transparent"
 
     /// Reads any version: whatever the file leaves out, or this version
     /// cannot read, takes its default rather than failing the project.
@@ -124,6 +132,7 @@ struct BeatProject: Codable, Hashable {
         c.update(&gridFollowsDeck, .gridFollowsDeck)
         c.update(&beat, .beat)
         c.update(&title, .title)
+        c.update(&transparent, .transparent)
     }
 }
 
@@ -209,12 +218,16 @@ struct BeatCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
                 .disabled(session == nil)
             Divider()
+            // The sheet waits for the song and every slide before it exports.
             Button("Export…") { session?.showExport = true }
                 .keyboardShortcut("e", modifiers: [.command])
                 .disabled(session == nil)
         }
+        // Nothing here prints, and ⌘P plays.
+        CommandGroup(replacing: .printItem) {}
         CommandMenu("Beat") {
             Button("Play or Pause") { session?.togglePlay() }
+                .keyboardShortcut("p", modifiers: [.command])
                 .disabled(session == nil)
             Button("Back to the Start") { session?.rewind() }
                 .keyboardShortcut(.leftArrow, modifiers: [.command])
@@ -240,7 +253,8 @@ enum BeatPanels {
         panel.message = "Choose slides: images, PDFs (each page becomes a slide) or clips."
         panel.begin { response in
             guard response == .OK else { return }
-            let urls = panel.urls
+            // In the order Finder lists them by name, so slide 2 comes before slide 10.
+            let urls = panel.urls.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             MainActor.assumeIsolated { session.importSlides(urls) }
         }
     }

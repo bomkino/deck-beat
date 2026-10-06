@@ -15,6 +15,13 @@ public struct Composition: @unchecked Sendable {
     /// Loop length for the background; defaults to the scene loop.
     public var backdropLoop: Double?
     public var drawBackdrop: Bool = true
+    /// The project leaves its background out of exports; previews show a
+    /// checkerboard in its place.
+    public var transparent = false
+    /// Keeps the finish's vignette on a transparent frame. Off by default: a
+    /// grid runs to the frame's edges, and over someone else's footage the
+    /// vignette would only darken the edge slides.
+    public var vignetteOverAlpha = false
     /// Texture indices that play video, decoded per frame by a `VideoPool`.
     public var videos: [Int: VideoClip] = [:]
     /// Words over the finished frame.
@@ -84,6 +91,11 @@ public struct ExportSettings: Sendable {
     }
 
     public var frameCount: Int { max(1, Int((duration * Double(fps)).rounded())) }
+
+    /// When frame `i` is taken. Frames divide the length evenly, so the step
+    /// from the last frame back to the first is a frame like any other even
+    /// when the loop is not a whole number of frames long.
+    public func time(ofFrame i: Int) -> Double { Double(i) * duration / Double(frameCount) }
 }
 
 /// Renders compositions offline, frame-exact, with motion blur.
@@ -93,6 +105,8 @@ public final class Exporter: @unchecked Sendable {
     /// Encodes the next video frame while the GPU draws the last; off exports
     /// one frame at a time (for A/B timing). Clips with video slides always do.
     public var overlapFrames = true
+    /// A premultiplied frame awaiting its title, for straight-alpha exports.
+    private var straightScratch: MTLTexture?
 
     public init(renderer: StageRenderer? = nil) throws {
         self.renderer = try renderer ?? StageRenderer()
@@ -101,20 +115,22 @@ public final class Exporter: @unchecked Sendable {
 
     /// Renders one frame at time `t` into a CGImage.
     public func still(_ comp: Composition, at t: Double, width: Int, height: Int, samples: Int = 1, fps: Int = 30,
-                      transparent: Bool = false) throws -> CGImage {
+                      transparent: Bool = false, checker: Bool = false) throws -> CGImage {
         let gpu = GPU.shared
         let out = gpu.makeTexture(width: width, height: height, format: .bgra8Unorm, usage: [.renderTarget, .shaderRead])
         guard let cb = gpu.queue.makeCommandBuffer() else { throw RenderError.io("GPU unavailable.") }
-        try encode(cb, comp, at: t, output: out, samples: samples, fps: fps, frameIndex: UInt32(max(0, t * Double(fps))), transparent: transparent)
+        try encode(cb, comp, at: t, output: out, samples: samples, fps: fps, frameIndex: UInt32(max(0, t * Double(fps))), transparent: transparent,
+                   checker: checker)
         cb.commit()
         cb.waitUntilCompleted()
         if let e = cb.error { throw RenderError.io("GPU error: \(e.localizedDescription)") }
-        guard let img = ImageOutput.cgImage(from: out, premultipliedAlpha: transparent) else { throw RenderError.io("Could not read the frame.") }
+        guard let img = ImageOutput.cgImage(from: out, premultipliedAlpha: transparent && !checker) else { throw RenderError.io("Could not read the frame.") }
         return img
     }
 
     public func encode(_ cb: MTLCommandBuffer, _ comp: Composition, at t: Double, output: MTLTexture, samples: Int,
-                       fps: Int, frameIndex: UInt32, transparent: Bool, pool: VideoPool? = nil, backdropScale: Float = 1) throws {
+                       fps: Int, frameIndex: UInt32, transparent: Bool, pool: VideoPool? = nil, backdropScale: Float = 1,
+                       straightAlpha: Bool = false, checker: Bool = false) throws {
         var comp = comp
         if let pool, !comp.videos.isEmpty { comp.textures = pool.textures(for: comp, at: t, commandBuffer: cb) }
         var ctx = comp.context
@@ -122,9 +138,11 @@ public final class Exporter: @unchecked Sendable {
         var look = comp.look
         var backdrop = comp.backdrop
         comp.modulate?(t, &look, &backdrop)
+        // Over someone else's footage the vignette would only darken the edge slides.
+        if transparent, !comp.vignetteOverAlpha { look.finish.vignette = 0 }
         let shutter = Double(look.shutter) / Double(max(fps, 1))
         let effectiveSamples = look.shutter > 0.01 && comp.scene.allowsMotionBlur ? samples : 1
-        if look.mood > 0.001, !comp.itemPalettes.isEmpty, comp.drawBackdrop {
+        if look.mood > 0.001, !comp.itemPalettes.isEmpty, comp.drawBackdrop, !transparent {
             backdrop.palette = Mood.palette(base: backdrop.palette, frame: comp.scene.frame(at: t, ctx),
                                             itemPalettes: comp.itemPalettes, amount: look.mood)
         }
@@ -133,19 +151,32 @@ public final class Exporter: @unchecked Sendable {
             backdropPhase: comp.backdropPhase(at: t), look: look, samples: effectiveSamples,
             frameIndex: frameIndex, keepAlpha: transparent, drawBackdrop: comp.drawBackdrop && !transparent)
         request.backdropScale = backdropScale
+        // A title goes over the premultiplied frame; only then is it made straight.
+        let straightLater = straightAlpha && comp.overlay != nil
+        request.straightAlpha = straightAlpha && !straightLater
+        request.checker = checker
+        var target = output
+        if straightLater {
+            if straightScratch?.width != output.width || straightScratch?.height != output.height {
+                straightScratch = GPU.shared.makeTexture(width: output.width, height: output.height, format: .rgba16Float,
+                                                         label: "premultiplied frame")
+            }
+            if let s = straightScratch { target = s }
+        }
         let scene = comp.scene
         let drift = look.cameraDrift
         let loop = comp.loopDuration
         // A title card pulls focus off the stage while it shows.
         let pull = comp.overlay.map { $0.scrim > 0 ? $0.strength(at: t, loop: loop) : 0 } ?? 0
         let defocus = pull * 0.022 * Float(output.height)
-        try renderer.encode(cb, output: output, request: request, textures: comp.textures) { offset in
+        try renderer.encode(cb, output: target, request: request, textures: comp.textures) { offset in
             var frame = scene.frame(at: t + Double(offset) * shutter, ctx)
             if drift > 0.001 { frame.camera.sway = Self.drift(at: t + Double(offset) * shutter, loop: loop, amount: drift) }
             if defocus > 0.05 { for i in frame.cards.indices { frame.cards[i].blur += defocus } }
             return frame
         }
-        if let overlay = comp.overlay { try titles.encode(cb, overlay, at: t, loop: loop, output: output) }
+        if let overlay = comp.overlay { try titles.encode(cb, overlay, at: t, loop: loop, output: target) }
+        if target !== output { try titles.straighten(cb, from: target, to: output) }
     }
 
     /// A slow camera drift: a small orbit and a breath of dolly around the
@@ -188,21 +219,39 @@ public final class Exporter: @unchecked Sendable {
 
         case .pngSequence:
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            let out = gpu.makeTexture(width: s.width, height: s.height, format: .bgra8Unorm, usage: [.renderTarget, .shaderRead])
+            // Read back straight from shared memory, and compress the PNGs on
+            // other cores while the GPU renders the next frames.
+            let out = gpu.makeTexture(width: s.width, height: s.height, format: .bgra8Unorm, usage: [.renderTarget, .shaderRead],
+                                      storage: .shared)
+            let writers = OperationQueue()
+            writers.maxConcurrentOperationCount = 4
+            let slots = DispatchSemaphore(value: 8)
+            let failure = PNGFailure()
+            defer { writers.waitUntilAllOperationsAreFinished() }
             for i in 0..<total {
                 if isCancelled() { throw RenderError.cancelled }
-                let t = Double(i) / Double(s.fps)
+                if let e = failure.error { throw e }
+                let t = s.time(ofFrame: i)
                 try renderSync(comp, at: t, output: out, samples: s.samples, fps: s.fps, frameIndex: UInt32(i), transparent: s.transparent, pool: pool)
                 guard let img = ImageOutput.cgImage(from: out, premultipliedAlpha: s.transparent) else { throw RenderError.io("Could not read frame \(i).") }
-                try ImageOutput.writePNG(img, to: url.appendingPathComponent(String(format: "frame-%05d.png", i)))
+                let file = url.appendingPathComponent(String(format: "frame-%05d.png", i))
+                slots.wait()
+                writers.addOperation {
+                    defer { slots.signal() }
+                    do { try ImageOutput.writePNG(img, to: file) } catch { failure.record(error) }
+                }
                 if i % 10 == 0 { preview?(img) }
                 progress(Progress(frame: i + 1, total: total))
             }
+            writers.waitUntilAllOperationsAreFinished()
+            if let e = failure.error { throw e }
 
         case let .video(codec):
             let keepAlpha = s.transparent && codec.supportsAlpha
+            // ProRes 4444 stores straight alpha and says so; HEVC with alpha takes it premultiplied.
+            let straight = keepAlpha && codec == .prores4444
             let writer = try VideoWriter(url: url, width: s.width, height: s.height, fps: s.fps, codec: codec, audio: s.audio)
-            let target = PixelBufferTarget(width: s.width, height: s.height)
+            let target = PixelBufferTarget(width: s.width, height: s.height, alpha: keepAlpha ? (straight ? .straight : .premultiplied) : nil)
             // While the GPU draws one frame the next is worked out and encoded.
             // Video slides decode into shared frames, so with them each frame finishes first.
             let overlap = comp.videos.isEmpty && overlapFrames
@@ -212,20 +261,23 @@ public final class Exporter: @unchecked Sendable {
                 if let e = f.cb.error { throw RenderError.io("GPU error: \(e.localizedDescription)") }
                 _ = f.cvTex
                 try writer.append(f.buffer)
-                if let preview, f.index % 12 == 0, let img = ImageOutput.cgImage(pixelBuffer: f.buffer, keepAlpha: keepAlpha) { preview(img) }
+                if let preview, f.index % 12 == 0,
+                   let img = ImageOutput.cgImage(pixelBuffer: f.buffer, keepAlpha: keepAlpha, straight: straight) { preview(img) }
                 progress(Progress(frame: f.index + 1, total: total))
             }
             do {
                 for i in 0..<total {
                     if isCancelled() { throw RenderError.cancelled }
-                    let t = Double(i) / Double(s.fps)
+                    let t = s.time(ofFrame: i)
                     let (buffer, texture, cvTex) = try target.next()
                     guard let cb = gpu.queue.makeCommandBuffer() else { throw RenderError.io("GPU unavailable.") }
                     try encode(cb, comp, at: t, output: texture, samples: s.samples, fps: s.fps, frameIndex: UInt32(i), transparent: keepAlpha,
-                               pool: pool)
+                               pool: pool, straightAlpha: straight)
                     cb.commit()
-                    if let previous = drawing { try finish(previous) }
+                    // Held before the last frame is finished, so an error there still waits for this one.
+                    let previous = drawing
                     drawing = (i, cb, buffer, cvTex)
+                    if let previous { try finish(previous) }
                     if !overlap, let current = drawing {
                         try finish(current)
                         drawing = nil
@@ -234,9 +286,20 @@ public final class Exporter: @unchecked Sendable {
                 if let last = drawing { try finish(last) }
                 try await writer.finish()
             } catch {
+                // A frame still on the GPU writes into a pixel buffer; let it finish first.
+                drawing?.cb.waitUntilCompleted()
+                drawing = nil
                 writer.cancel()
                 throw error
             }
         }
     }
+}
+
+/// The first error from the PNG writers, read from the render loop.
+final class PNGFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var first: Error?
+    var error: Error? { lock.lock(); defer { lock.unlock() }; return first }
+    func record(_ e: Error) { lock.lock(); if first == nil { first = e }; lock.unlock() }
 }

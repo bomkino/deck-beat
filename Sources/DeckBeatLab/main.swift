@@ -11,7 +11,8 @@ import UniformTypeIdentifiers
 
 // beat-lab: headless checks and renders, for CI and visual review.
 //
-//   beat-lab check                 song analysis, layout, plans and scenes, on the CPU
+//   beat-lab check                 song analysis, layout, plans and scenes, on the CPU; and
+//                                  transparent exports on the GPU, where there is one
 //   beat-lab bench                 how long listening and planning take, on the CPU
 //   beat-lab render --out <dir>    contact sheets of every Look, of wide decks and of the 3.0
 //                                  moves, a demo clip with sound, and export timings old and new
@@ -21,7 +22,8 @@ let args = Array(CommandLine.arguments.dropFirst())
 
 switch args.first {
 case "check":
-    let failed = Checks.run()
+    var failed = Checks.run()
+    failed += await TransparentExport.run()
     print(failed == 0 ? "All checks passed." : "\(failed) checks failed.")
     exit(failed == 0 ? 0 : 1)
 
