@@ -15,6 +15,8 @@ enum NewMoves {
         var slide: (w: Int, h: Int)
         var count: Int
         var look: String
+        /// The grid fitted to the deck; off for a grid smaller than the deck, whose cells turn over.
+        var fitted = true
         var tweak: (inout BeatSettings) -> Void = { _ in }
         var title: ReelTitle?
         /// Four moments to show, named, from the plan.
@@ -68,11 +70,11 @@ enum NewMoves {
         ("moves-sheet-2", [
             Column(name: "Zoom in · 2576 · 15", slide: ultrawide, count: 15, look: "screening-room", tweak: { $0.feature = .twoBars },
                    moments: zoom),
-            Column(name: "Blinds · 1920 · 30", slide: hd, count: 30, look: "light-box", tweak: { s in
+            Column(name: "Blinds · 1920 · 30", slide: hd, count: 30, look: "light-box", fitted: false, tweak: { s in
                 s.grid.rotate = true
                 s.turn = .blinds
             }, moments: turn),
-            Column(name: "Page · 2576 · 30", slide: ultrawide, count: 30, look: "gallery-wall", tweak: { s in
+            Column(name: "Page · 2576 · 30", slide: ultrawide, count: 30, look: "gallery-wall", fitted: false, tweak: { s in
                 s.grid.rotate = true
                 s.turn = .page
             }, moments: turn),
@@ -106,7 +108,7 @@ enum NewMoves {
                 let slideAspect = Float(spec.slide.w) / Float(spec.slide.h)
                 let aspect = Float(tile.w) / Float(tile.h)
                 let made = Render.compose(Looks.look(spec.look), song: song, media: media, clip: Clip(length: .s30), aspect: aspect,
-                                          grid: { $0.fitted(count: spec.count, aspect: aspect, slideAspect: slideAspect) },
+                                          grid: { spec.fitted ? $0.fitted(count: spec.count, aspect: aspect, slideAspect: slideAspect) : $0 },
                                           title: spec.title, palettes: palettes, tweak: spec.tweak)
                 let cues = spec.title.map { WordTiming.cues($0, plan: made.plan) } ?? []
                 let moments = spec.moments(made.plan, cues)

@@ -60,7 +60,7 @@ jobs:
           still v3-strip --deck hd --slides 15 --drop strip --time drop:1.6
           still v3-weave --deck wide --slides 15 --drop weave --time drop:-0.45
           still v3-zoom --deck wide --slides 15 --feature zoom --time feature:0.4
-          still v3-blinds --deck hd --slides 30 --turn blinds --time swap:-0.06
+          still v3-blinds --deck hd --slides 30 --grid 3x5 --turn blinds --time swap:-0.06
           still v3-words --deck hd --slides 15 --time word:2 --beat-words \
             --title "Brightside raises its Series A" --kicker "pitch.dog · 2026"
           # The whole window, inspector and transport included, once it has settled,

@@ -144,10 +144,13 @@ enum Shapes {
             }
 
         case .tunnel:
-            // The cover at the front, the rest on a spiral going back, turning,
-            // the whole tunnel drifting towards the camera over the hold.
+            // The cover at the front, the rest on a spiral going back round it,
+            // turning, the whole tunnel drifting towards the camera over the hold.
+            // The spiral widens with depth, so its walls stay in view around the
+            // cover and close in only gently towards the far end.
             let w = min(W * 0.62, H * 0.36 * typical)
-            let rim = min(W, H) * 0.38
+            let d = GridLayout.eyeDistance
+            let rim = SIMD2(W * 0.42, H * 0.3)
             let depth: Float = 0.24
             let order = layout.distances(from: layout.cells[layout.centreCell].centre).enumerated()
                 .sorted { ($0.element, $0.offset != cover ? 1 : 0, $0.offset) < ($1.element, $1.offset != cover ? 1 : 0, $1.offset) }
@@ -158,11 +161,14 @@ enum Shapes {
             let travel = depth * 0.9 * min(max(through, 0), 1)
             for (k, c) in ranked.enumerated() {
                 let a = Float(k) * 2.39996 + spin
-                let r = rim * min(1, Float(k) / 2)
                 let z = 0.04 - Float(k) * depth + travel
+                // Where the card sits as seen from the camera, then pushed back to its depth.
+                let near = d / max(d - z, 0.2)
+                let seen = rim * min(1, Float(k) / 2) * (0.6 + 0.4 * near)
+                let r = seen / near
                 // Each card faces a little into the tunnel.
                 let lean = 0.25 * min(1, Float(k) / 2)
-                out[c] = Placement(position: centre + SIMD3(r * cosf(a), r * sinf(a), z),
+                out[c] = Placement(position: centre + SIMD3(r.x * cosf(a), r.y * sinf(a), z),
                                    rotation: SIMD3(lean * sinf(a), -lean * cosf(a), 0), width: w,
                                    shade: 0.35 + 0.65 * expf(min(z, 0) * 0.5), opacity: 1 - Ease.smooth((z - 0.3) / 0.2),
                                    shadow: 0, blur: max(0, -z) * 2.5)

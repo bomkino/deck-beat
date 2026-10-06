@@ -309,7 +309,7 @@ struct SongCard: View {
 /// "words" [--caption] [--beat-words]` sets a title card, or a caption shown
 /// throughout, its words landing on the beat if asked. `--drop fan`,
 /// `--feature zoom`, `--turn blinds`, `--entrance page` and `--room 0.8` try
-/// the moves; `--time drop:0.4` times the still from a moment of the plan.
+/// the moves, and `--grid 3x5` sets the grid by hand; `--time drop:0.4` times the still from a moment of the plan.
 struct BeatSnapshotHost: ViewModifier {
     let session: BeatSession
     @State private var still: CGImage?
@@ -370,6 +370,9 @@ struct BeatSnapshotHost: ViewModifier {
         }
         if let v = StudioSnapshot.arg("--entrance").flatMap(Entrance.init(rawValue:)) { session.update("Entrance") { $0.settings.intro.entrance = v } }
         if let v = StudioSnapshot.arg("--room").flatMap(Float.init) { session.update("Room") { $0.stage.mood = v } }
+        if let g = StudioSnapshot.arg("--grid")?.split(separator: "x").compactMap({ Int($0) }), g.count == 2 {
+            session.setGrid(columns: g[0], rows: g[1])
+        }
         if let c = StudioSnapshot.arg("--clip").flatMap(Int.init).flatMap(ClipLength.init(rawValue:)) { session.setClip(c) }
         session.clock.playing = false
         session.clock.time = Self.time(StudioSnapshot.arg("--time"), session: session) ?? 3

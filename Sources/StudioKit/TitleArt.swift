@@ -92,12 +92,18 @@ public enum TitleArt {
         var width = maxWidth
         if balanced {
             // Break at the narrowest width that takes no more lines, so a title
-            // ends on a full line rather than one stray word.
+            // ends on a full line rather than one stray word. A width that would
+            // break inside a word counts as too narrow.
+            let chars = string.string as NSString
             func count(_ w: CGFloat) -> Int {
                 var n = 0, at = 0
                 while at < length, n <= maxLines {
                     at += max(1, CTTypesetterSuggestLineBreak(typesetter, at, Double(w)))
                     n += 1
+                    if at < length, let last = UnicodeScalar(chars.character(at: at - 1)),
+                       !CharacterSet.whitespacesAndNewlines.contains(last), last != "-", last != "\u{2013}", last != "/" {
+                        return maxLines + 1
+                    }
                 }
                 return n
             }
