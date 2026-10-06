@@ -132,7 +132,7 @@ The app can also render a still without opening a window, which is how `verify.s
 
 ## Releases
 
-Releases are published from `main` by the `release` workflow (Actions › release › Run workflow), at the version in `scripts/build.sh`, with the notes from `CHANGELOG.md`. The release then offers no update until it is signed on the Mac that holds the update key: `bash scripts/sign-release.sh <version>`. The key never leaves that Mac. [docs/UPDATES.md](docs/UPDATES.md) has the details.
+Releases are published from `main` by the `release` workflow (Actions › release › Run workflow), at the version in `scripts/build.sh`, with the notes from `CHANGELOG.md`. The workflow signs the update with pitch.dog's key, kept as a secret only `main` can use, so installed copies are offered the new version as soon as it is out. [docs/UPDATES.md](docs/UPDATES.md) has the details, including what keeping the key on GitHub costs.
 
 ## How it is put together
 

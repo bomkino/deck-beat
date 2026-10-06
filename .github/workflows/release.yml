@@ -1,25 +1,43 @@
 # Publishes a release of Deck Beat from main, on demand (Actions › release ›
 # Run workflow): builds the app at the version in scripts/build.sh, packs the
-# disk image and the ZIP the in-app updater installs, and publishes them on the
-# release tagged v<version>, marked Latest, with checksums and the notes from
-# CHANGELOG.md.
+# disk image and the ZIP the in-app updater installs, signs the update feed
+# with pitch.dog's update key, and publishes them on the release tagged
+# v<version>, marked Latest, with checksums and the notes from CHANGELOG.md.
+# Installed copies are offered the new version as soon as it is out; the last
+# step proves it with a real copy of the previous release.
 #
-# The release's appcast.xml offers no update until it is signed: run
-# `bash scripts/sign-release.sh <version>` on the Mac that holds the update key
-# (docs/UPDATES.md). The key never comes near GitHub.
+# The key is the SPARKLE_PRIVATE_KEY secret of the `release` environment,
+# which only main may use (docs/UPDATES.md). It is written to a file only the
+# runner can read, used by Sparkle's generate_appcast, and deleted.
+#
+# Rehearse does everything but publish: build, pack, sign, check the signature
+# against the app, and update a copy of the previous release from the live feed.
 name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      rehearse:
+        description: Rehearse (build, pack and sign, but don't publish)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
     if: github.ref == 'refs/heads/main'
     runs-on: macos-26
-    timeout-minutes: 40
+    environment: release
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REHEARSE: ${{ inputs.rehearse }}
     steps:
       - uses: actions/checkout@v4
       - name: Read the version
@@ -28,27 +46,50 @@ jobs:
           v="$(sed -n 's/.*VERSION="\([0-9.]*\)".*/\1/p' scripts/build.sh | head -1)"
           [ -n "$v" ] || { echo "no version in scripts/build.sh"; exit 1; }
           if gh release view "v$v" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "v$v is already released; raise VERSION in scripts/build.sh first (versions only go up)"; exit 1
+            if [ "$REHEARSE" = true ]; then
+              echo "v$v is out already; rehearsing with it anyway"
+            else
+              echo "v$v is already released; raise VERSION in scripts/build.sh first (versions only go up)"; exit 1
+            fi
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Get Sparkle's tools and the update key
         env:
-          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          [ -n "$SPARKLE_PRIVATE_KEY" ] || { echo "::error::The release environment has no SPARKLE_PRIVATE_KEY secret. docs/UPDATES.md has the one-time command that sets it."; exit 1; }
+          curl -fsSL -o "$RUNNER_TEMP/sparkle.tar.xz" https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz
+          echo "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c  $RUNNER_TEMP/sparkle.tar.xz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sparkle" && tar -xf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          umask 077
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | tr -d '[:space:]' > "$RUNNER_TEMP/update.key"
+          echo "SPARKLE_BIN=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_ENV"
+          echo "SPARKLE_KEY=$RUNNER_TEMP/update.key" >> "$GITHUB_ENV"
       - name: Build Deck Beat
         run: bash scripts/build.sh release
       - name: Pack the release
         run: |
           v="${{ steps.version.outputs.version }}"
           bash scripts/pack-release.sh release-out
-          # The notes: this version's section of CHANGELOG.md.
+          # The notes, on the release and in the update window: this version's section of CHANGELOG.md.
           awk -v v="$v" '$0 ~ "^## " v " " { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
           [ -s notes.md ] || { echo "no section for $v in CHANGELOG.md"; exit 1; }
           cat notes.md
+      - name: Sign the update
+        run: |
+          bash scripts/sign-release.sh release-out notes.md
+          rm -f "$SPARKLE_KEY"
           ls -l release-out
       - name: Publish the release
+        if: ${{ !inputs.rehearse }}
         run: |
           v="${{ steps.version.outputs.version }}"
           gh release create "v$v" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
             --title "Deck Beat $v for Apple silicon Macs" --notes-file notes.md release-out/*
           gh release view "v$v" -R "$GITHUB_REPOSITORY"
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Update a copy of the previous release from the live feed
+        timeout-minutes: 10
+        run: bash scripts/test-live-update.sh
+      - name: Forget the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/update.key"
