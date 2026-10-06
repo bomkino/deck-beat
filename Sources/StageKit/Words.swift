@@ -32,14 +32,38 @@ public struct ReelTitle: Codable, Hashable, Sendable {
 
     /// The typeface the words are set in.
     public enum Face: String, Codable, CaseIterable, Sendable {
+        /// pitch.dog's own type: PD Head for the title, PD Eyebrow for the line above.
+        case pitchdog
+        /// PD Head italic for the title.
+        case pitchdogItalic = "pitchdog-italic"
         case modern, grotesk, editorial, poster
 
         public var title: String {
             switch self {
+            case .pitchdog: return "pitch.dog"
+            case .pitchdogItalic: return "pitch.dog Italic"
             case .modern: return "Modern"
             case .grotesk: return "Grotesk"
             case .editorial: return "Editorial"
             case .poster: return "Poster"
+            }
+        }
+    }
+
+    /// How words that land on the beat arrive.
+    public enum Motion: String, Codable, CaseIterable, Sendable {
+        /// Each group falls onto its beat with a small give.
+        case land
+        /// Each group grows in from 85 % with a little overshoot, full size on its beat.
+        case pop
+        /// Each group rises into place from behind its own line, like a title sequence.
+        case reveal
+
+        public var title: String {
+            switch self {
+            case .land: return "Land"
+            case .pop: return "Pop"
+            case .reveal: return "Reveal"
             }
         }
     }
@@ -53,9 +77,12 @@ public struct ReelTitle: Codable, Hashable, Sendable {
     public var face: Face
     /// The words land a few at a time on the beat instead of rising in together.
     public var beat: Bool
+    /// How they land, when they land on the beat.
+    public var motion: Motion
 
+    /// A new title is set in pitch.dog type; a saved one keeps the face it was saved with.
     public init(text: String = "", kicker: String = "", placement: Placement = .corner, timing: Timing = .throughout, ink: Ink = .auto,
-                face: Face = .modern, beat: Bool = false) {
+                face: Face = .pitchdog, beat: Bool = false, motion: Motion = .land) {
         self.text = text
         self.kicker = kicker
         self.placement = placement
@@ -63,6 +90,7 @@ public struct ReelTitle: Codable, Hashable, Sendable {
         self.ink = ink
         self.face = face
         self.beat = beat
+        self.motion = motion
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,6 +102,7 @@ public struct ReelTitle: Codable, Hashable, Sendable {
         ink = try c.decodeIfPresent(Ink.self, forKey: .ink) ?? .auto
         face = try c.decodeIfPresent(Face.self, forKey: .face) ?? .modern
         beat = try c.decodeIfPresent(Bool.self, forKey: .beat) ?? false
+        motion = (try? c.decodeIfPresent(Motion.self, forKey: .motion)) ?? .land
     }
 
     public var isEmpty: Bool {
@@ -153,6 +182,42 @@ public struct WordCue: Hashable, Sendable {
         }
         return (alpha, drop)
     }
+
+    /// Pop: opacity and size at loop time `u`. The group grows from 85 % with
+    /// a small overshoot and is full size on its beat; it shrinks a little as it goes.
+    public func pop(at u: Double) -> (alpha: Float, scale: Float) {
+        let lead = max(self.lead, 1e-3)
+        let k = Float(min(max((u - (land - lead)) / lead, 0), 1))
+        guard k > 0 else { return (0, 0.85) }
+        // Back-out: about 4 % over full size halfway in, home on the beat.
+        let c: Float = 3
+        let x = k - 1
+        var scale = 0.85 + 0.15 * (1 + (c + 1) * x * x * x + c * x * x)
+        let after = Float((u - land) / 0.12)
+        if after > 0, after < 1 { scale += 0.006 * sinf(.pi * after) * (1 - after) }
+        var alpha = Ease.smooth(k / 0.55)
+        if leave.isFinite {
+            let lift = Float(min(max((u - leave) / lead, 0), 1))
+            alpha *= 1 - Ease.smooth(lift)
+            scale *= 1 - 0.08 * Ease.smooth(lift)
+        }
+        return (alpha, scale)
+    }
+
+    /// Reveal: how much of a line's height the group still sits below its
+    /// place at loop time `u`, 1 (hidden behind its line) to 0 (home on its
+    /// beat). It sinks back the way it came as it goes.
+    public func reveal(at u: Double) -> Float {
+        let lead = max(self.lead, 1e-3)
+        let k = Float(min(max((u - (land - lead)) / lead, 0), 1))
+        guard k > 0 else { return 1 }
+        var hidden = 1 - Ease.register(k)
+        if leave.isFinite {
+            let lift = Float(min(max((u - leave) / lead, 0), 1))
+            hidden = max(hidden, Ease.place(lift))
+        }
+        return hidden
+    }
 }
 
 /// Part of a drawn title that follows one cue: its rectangle in the frame as
@@ -160,10 +225,15 @@ public struct WordCue: Hashable, Sendable {
 public struct TitlePiece: Hashable, Sendable {
     public var rect: SIMD4<Float>
     public var cue: Int
+    /// The words themselves, as (u0, v0, u1, v1): from the top of their capitals
+    /// to the foot of their line. A pop grows from their middle; a reveal
+    /// rises from behind their foot.
+    public var words: SIMD4<Float>
 
-    public init(rect: SIMD4<Float>, cue: Int) {
+    public init(rect: SIMD4<Float>, cue: Int, words: SIMD4<Float>? = nil) {
         self.rect = rect
         self.cue = cue
+        self.words = words ?? rect
     }
 }
 

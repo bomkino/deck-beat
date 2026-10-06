@@ -17,6 +17,8 @@ public struct TitleOverlay: @unchecked Sendable {
     public var cues: [WordCue] = []
     /// Where each group sits in a frame of this pixel size, for words that land on the beat.
     public var pieces: (@Sendable (Int, Int) -> [TitlePiece])?
+    /// How words on the beat arrive: falling, popping or rising from behind their line.
+    public var motion: ReelTitle.Motion = .land
 
     public init(key: Int, timing: ReelTitle.Timing, scrim: Float, draw: @escaping @Sendable (Int, Int) -> CGImage?) {
         self.key = key
@@ -92,12 +94,29 @@ final class TitleCompositor {
         // Words on the beat: each piece follows its own cue.
         var rects: [SIMD4<Float>] = []
         var motion: [SIMD4<Float>] = []
+        var words: [SIMD4<Float>] = []
         if overlay.onBeat {
             let u = wrap(t, loop)
             for piece in drawn.pieces.prefix(Self.maxPieces) where overlay.cues.indices.contains(piece.cue) {
-                let m = overlay.cues[piece.cue].presence(at: u)
+                let cue = overlay.cues[piece.cue]
                 rects.append(piece.rect)
-                motion.append(SIMD4(m.alpha * alpha, m.drop, 0, 0))
+                words.append(piece.words)
+                // (opacity, drop, scale, matte): the matte hides everything below it, 2 for none.
+                switch overlay.motion {
+                case .land:
+                    let m = cue.presence(at: u)
+                    motion.append(SIMD4(m.alpha * alpha, m.drop, 1, 2))
+                case .pop:
+                    let m = cue.pop(at: u)
+                    motion.append(SIMD4(m.alpha * alpha, 0, m.scale, 2))
+                case .reveal:
+                    let hidden = cue.reveal(at: u)
+                    let line = piece.words.w - piece.words.y
+                    // Hidden behind the foot of its own line while it moves; free of the matte once home,
+                    // so its shadow falls where it likes.
+                    let matte: Float = hidden > 0.001 ? piece.words.w + line * 0.06 : 2
+                    motion.append(SIMD4(hidden < 0.999 ? alpha : 0, hidden * line * 1.12, 1, matte))
+                }
             }
             guard motion.contains(where: { $0.x > 0.002 }) || overlay.scrim * overlay.strength(at: t, loop: loop) > 0.002 else { return }
         }
@@ -117,9 +136,11 @@ final class TitleCompositor {
             if rects.isEmpty {
                 rects = [.zero]
                 motion = [.zero]
+                words = [.zero]
             }
             enc.setFragmentBytes(rects, length: MemoryLayout<SIMD4<Float>>.stride * rects.count, index: 1)
             enc.setFragmentBytes(motion, length: MemoryLayout<SIMD4<Float>>.stride * motion.count, index: 2)
+            enc.setFragmentBytes(words, length: MemoryLayout<SIMD4<Float>>.stride * words.count, index: 3)
         }
         enc.setFragmentTexture(drawn.texture, index: 0)
         enc.setFragmentSamplerState(gpu.sampler(.linearClamp), index: 0)
@@ -183,17 +204,22 @@ fragment float4 title_fragment(FSOut in [[stage_in]], texture2d<float> words [[t
 }
 
 // Words on the beat: the frame is tiled into pieces, one group of words in
-// each; piece i shows where its rectangle lies, dropped motion[i].y and faded
-// by motion[i].x, over the same dimming. p.w is the number of pieces.
+// each; piece i shows where its rectangle lies, dropped motion[i].y, scaled
+// motion[i].z about the middle of its words (bounds[i]) and faded by
+// motion[i].x, with nothing showing below the matte motion[i].w, over the
+// same dimming. p.w is the number of pieces.
 fragment float4 title_pieces_fragment(FSOut in [[stage_in]], texture2d<float> words [[texture(0)]], sampler s [[sampler(0)]],
                                       constant float4 &p [[buffer(0)]], constant float4 *rects [[buffer(1)]],
-                                      constant float4 *motion [[buffer(2)]]) {
+                                      constant float4 *motion [[buffer(2)]], constant float4 *bounds [[buffer(3)]]) {
     float4 w = float4(0.0);
     int n = int(p.w);
     for (int i = 0; i < n; i++) {
         float a = motion[i].x;
-        if (a <= 0.0) continue;
-        float2 uv = in.uv - float2(0.0, motion[i].y);
+        if (a <= 0.0 || in.uv.y > motion[i].w) continue;
+        float4 b = bounds[i];
+        float2 mid = (b.xy + b.zw) * 0.5;
+        float k = max(motion[i].z, 0.05);
+        float2 uv = mid + (in.uv - mid) / k - float2(0.0, motion[i].y);
         float4 r = rects[i];
         if (uv.x < r.x || uv.x >= r.z || uv.y < r.y || uv.y >= r.w) continue;
         float4 c = words.sample(s, uv) * a;

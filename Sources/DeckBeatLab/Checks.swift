@@ -812,6 +812,62 @@ enum Checks {
                   "3.0 settings read as a deal, tight and tidy on a grid, ending in a loop; a round trip keeps the 6.0 choices")
         }
 
+        // Pop and Reveal: every group arrives on its own beat, full size and home exactly on it,
+        // a pop overshooting a little on the way; none shows on a loop's first or last frame,
+        // after a loop or a leave alike. A saved title keeps its face; a new one is set in pitch.dog type.
+        do {
+            var motionBad: [String] = [], landings = 0, overshoot: Float = 0
+            for motion in [ReelTitle.Motion.pop, .reveal] {
+                for timing in ReelTitle.Timing.allCases {
+                    for outro in [Outro.loop, .leave, .close] {
+                        var m = BeatSettings()
+                        m.outro = outro
+                        let p = Choreographer.plan(a, settings: m, layout: grid, slides: 15, clipStart: 0, clipLength: 30)
+                        var title = headline
+                        title.timing = timing
+                        title.motion = motion
+                        let cues = WordTiming.cues(title, plan: p)
+                        let name = "\(motion.rawValue) \(timing.rawValue) \(outro.rawValue)"
+                        guard cues.count == title.beatGroups else { motionBad.append("\(name): \(cues.count) cues"); continue }
+                        for (i, c) in cues.enumerated() {
+                            landings += 1
+                            let before = c.land - c.lead - 1e-4
+                            switch motion {
+                            case .pop:
+                                let home = c.pop(at: c.land), gone = c.pop(at: before)
+                                let peak = stride(from: c.land - c.lead, through: c.land, by: c.lead / 40).map { c.pop(at: $0).scale }.max() ?? 0
+                                overshoot = max(overshoot, peak - 1)
+                                if abs(home.scale - 1) > 0.002 || home.alpha < 0.999 || gone.alpha > 0 || peak > 1.06 || peak < 1.01 {
+                                    motionBad.append(String(format: "%@ %d: home %.3f, peak %.3f", name as NSString, i, home.scale, peak))
+                                }
+                            default:
+                                let path = stride(from: before, through: c.land, by: c.lead / 40).map { c.reveal(at: $0) }
+                                let falls = zip(path, path.dropFirst()).allSatisfy { $1 <= $0 + 1e-6 }
+                                if c.reveal(at: c.land) > 0.001 || c.reveal(at: before) < 0.999 || !falls {
+                                    motionBad.append("\(name) \(i): reveal \(c.reveal(at: c.land)) on its beat")
+                                }
+                            }
+                        }
+                        if timing == .throughout, p.outro.kind.loops {
+                            let edges = [0, p.length - 1.0 / 240]
+                            let seen = cues.flatMap { c in edges.map { motion == .pop ? c.pop(at: $0).alpha : (c.reveal(at: $0) < 0.999 ? 1 : 0) } }
+                            if (seen.max() ?? 0) > 0.001 { motionBad.append("\(name): words at the seam") }
+                        }
+                    }
+                }
+            }
+            let saved = #"{"text":"Hello","kicker":"","placement":"centre","timing":"opening","ink":"auto","face":"grotesk","beat":true}"#
+            let old = try? decoder.decode(ReelTitle.self, from: Data(saved.utf8))
+            let bare = try? decoder.decode(ReelTitle.self, from: Data(#"{"text":"Hello"}"#.utf8))
+            var italic = ReelTitle(text: "Hello", beat: true, motion: .reveal)
+            italic.face = .pitchdogItalic
+            let again = (try? JSONEncoder().encode(italic)).flatMap { try? decoder.decode(ReelTitle.self, from: $0) }
+            let faces = old?.face == .grotesk && old?.motion == .land && bare?.face == .modern && ReelTitle().face == .pitchdog && again == italic
+            check("words pop and reveal", motionBad.isEmpty && faces, motionBad.isEmpty && faces
+                  ? String(format: "%d landings, home on the beat, a pop at most %.1f%% over; saved titles keep their face, new ones are pitch.dog", landings, overshoot * 100)
+                  : (motionBad.prefix(4) + (faces ? [] : ["faces: \(String(describing: old?.face)) \(String(describing: bare?.face))"])).joined(separator: "; "))
+        }
+
         return failures
     }
 

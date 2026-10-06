@@ -96,6 +96,13 @@ jobs:
           still v6-paste-up --look paste-up --deck mixed --slides 18 --time 11
           still v6-clear --look beat-by-beat --deck wide --slides 15 --margins clear --time 12
           still v6-transparent --look beat-by-beat --deck hd --slides 15 --background transparent --time drop:1.5
+          # Titles in pitch.dog type: a pop and a reveal caught partway in, and the italic at rest.
+          still v6-pop --deck hd --slides 15 --words pop --time arriving:2 \
+            --title "Brightside raises its Series A" --kicker "pitch.dog · 2026"
+          still v6-reveal --deck hd --slides 15 --words reveal --time arriving:2 \
+            --title "Brightside raises its Series A" --kicker "pitch.dog · 2026"
+          still v6-italic --look afterglow --deck wide --slides 15 --face pitchdog-italic --time word:2 --beat-words \
+            --title "Thank you for listening" --kicker "pitch.dog · 2026"
           # The whole window, inspector and transport included, once it has settled,
           # and the screen as the runner shows it, which also catches glass and vibrancy.
           perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1220x720 --time 2 --settle 10 \
@@ -116,7 +123,7 @@ jobs:
                    app-v3-fan app-v3-tunnel app-v3-strip app-v3-weave app-v3-zoom app-v3-blinds app-v3-words \
                    app-fix-lift app-fix-cover app-window-cells app-window-intro \
                    app-v6-build app-v6-hits app-v6-voices app-v6-mosaic app-v6-leave app-v6-curtain app-v6-drift \
-                   app-v6-collage app-v6-paste-up app-v6-clear app-v6-transparent; do
+                   app-v6-collage app-v6-paste-up app-v6-clear app-v6-transparent app-v6-pop app-v6-reveal app-v6-italic; do
             [ -s "lab-output/$f.png" ] || continue
             sips -s format jpeg -s formatOptions 70 -Z 1200 "lab-output/$f.png" --out "$RUNNER_TEMP/$f.jpg" >/dev/null
             echo "thumbnail: $f.jpg"

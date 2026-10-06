@@ -359,6 +359,11 @@ struct BeatSnapshotHost: ViewModifier {
                 t.placement = caption ? .corner : .centre
                 t.timing = caption ? .throughout : .opening
                 t.beat = CommandLine.arguments.contains("--beat-words")
+                if let face = StudioSnapshot.arg("--face").flatMap(ReelTitle.Face.init(rawValue:)) { t.face = face }
+                if let motion = StudioSnapshot.arg("--words").flatMap(ReelTitle.Motion.init(rawValue:)) {
+                    t.beat = true
+                    t.motion = motion
+                }
             }
         }
         if let id = StudioSnapshot.arg("--look") { session.choose(Looks.look(id)) }
@@ -402,6 +407,7 @@ struct BeatSnapshotHost: ViewModifier {
                          session.slideAspect, layout.columns, layout.rows, layout.shape.rawValue as NSString,
                          layout.arrangement.rawValue as NSString, cell.x, cell.y, layout.crop * 100))
         }
+        print("type: \(PDType.status)")
         if let comp = session.composition() {
             // A transparent project shows over a checkerboard, as on the stage.
             still = try? Exporter().still(comp, at: session.clock.time, width: f.width, height: f.height, samples: 4,
@@ -456,6 +462,12 @@ extension BeatSnapshotHost {
             let cues = WordTiming.cues(title, plan: plan)
             let i = Int(parts[1]) ?? 0
             return cues.indices.contains(i) ? cues[i].land + 0.03 : nil
+        case "arriving":
+            // Partway into the motion of a group of title words, before it lands.
+            guard let title = session.project.title else { return nil }
+            let cues = WordTiming.cues(title, plan: plan)
+            let i = Int(parts[1]) ?? 0
+            return cues.indices.contains(i) ? cues[i].land - cues[i].lead * 0.4 : nil
         default: return nil
         }
     }

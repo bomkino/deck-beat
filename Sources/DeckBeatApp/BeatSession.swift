@@ -211,7 +211,7 @@ final class BeatSession: StageSource {
 
     var exportCaption: String? {
         guard let c = clip else { return nil }
-        return "\(timecode(c.start))–\(timecode(c.start + c.length)) of the song, \(c.outro == .loop ? "looping" : "with its ending")."
+        return "\(timecode(c.start))–\(timecode(c.start + c.length)) of the song, \(c.outro.loops ? "looping" : "with its ending")."
     }
 
     /// Each slide's own shape, in deck order.
@@ -392,7 +392,7 @@ final class BeatSession: StageSource {
         h.combine(c)
         let key = h.finalize()
         if let cached = audioCache, cached.key == key { return cached.track }
-        let loop = c.outro == .loop
+        let loop = c.outro.loops
         let track = song.slice(from: c.start, length: c.length, fadeIn: loop ? 0.03 : 0.012, fadeOut: loop ? 0.03 : min(1.5, c.length * 0.2))
         audioCache = (key, track)
         return track

@@ -68,6 +68,9 @@ for APP in "${APPS[@]}"; do
   fi
   cp "$ROOT/NOTICES.md" "$APPDIR/Contents/Resources/NOTICES.md" 2>/dev/null || true
   cp -R "$ROOT/Resources/Licenses" "$APPDIR/Contents/Resources/Licenses"
+  # pitch.dog's fonts for titles, and the starter songs.
+  cp -R "$ROOT/Resources/Fonts" "$APPDIR/Contents/Resources/Fonts"
+  if [ -d "$ROOT/Resources/Songs" ]; then cp -R "$ROOT/Resources/Songs" "$APPDIR/Contents/Resources/Songs"; fi
   # Sparkle, as Swift Package Manager built it, keeping its own signature.
   mkdir -p "$APPDIR/Contents/Frameworks"
   ditto "$(dirname "$BIN")/Sparkle.framework" "$APPDIR/Contents/Frameworks/Sparkle.framework"

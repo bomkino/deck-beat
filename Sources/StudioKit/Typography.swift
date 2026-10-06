@@ -20,7 +20,7 @@ public struct TextRoleSpec: Sendable {
 
 public enum StudioType {
     /// Reported by headless runs, so a check can see which type the interface uses.
-    public static let status = "system type, \(TextRole.allCases.count) roles, \(ReelTitle.Face.allCases.count) title faces"
+    public static var status: String { "system type, \(TextRole.allCases.count) roles, \(ReelTitle.Face.allCases.count) title faces, \(PDType.status)" }
 
     public static func spec(_ role: TextRole) -> TextRoleSpec {
         switch role {
@@ -104,6 +104,50 @@ public enum Faces {
         default: name = "AvenirNext-Heavy"
         }
         return font(name, size: size)
+    }
+}
+
+/// pitch.dog's own type, bundled with the app from the pitch.dog type system:
+/// PD Head and PD Eyebrow, variable fonts set at the system's anchor weights.
+/// The fonts load straight from their files, so a copy the user has installed
+/// is never doubled up.
+public enum PDType {
+    static let wght: UInt32 = 0x7767_6874, ital: UInt32 = 0x6974_616C, wdth: UInt32 = 0x7764_7468
+
+    /// The fonts' descriptors, read once from Resources/Fonts.
+    nonisolated(unsafe) private static let faces: (head: CTFontDescriptor?, eyebrow: CTFontDescriptor?) = {
+        func load(_ file: String) -> CTFontDescriptor? {
+            guard let url = StudioResources.url("Fonts/" + file),
+                  let all = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] else { return nil }
+            return all.first
+        }
+        return (load("pd-head.ttf"), load("pd-eyebrow-full.ttf"))
+    }()
+
+    /// Which faces loaded, for headless runs and checks.
+    public static var status: String {
+        let found = [faces.head.map { _ in "PD Head" }, faces.eyebrow.map { _ in "PD Eyebrow" }].compactMap { $0 }
+        return found.isEmpty ? "pitch.dog fonts missing, falling back to Avenir Next" : found.joined(separator: " and ") + " loaded"
+    }
+
+    /// PD Head at `size`: 600 is the system's display anchor. No weight between anchors.
+    public static func head(_ size: CGFloat, weight: CGFloat = 600, italic: Bool = false) -> CTFont? {
+        guard let d = faces.head else { return nil }
+        let anchors: [CGFloat] = [265, 300, 400, 500, 600, 700, 900]
+        let w = anchors.min { abs($0 - weight) < abs($1 - weight) } ?? 600
+        return font(d, size, [wght: w, ital: italic ? 1 : 0])
+    }
+
+    /// PD Eyebrow at `size`: 500 at the narrow width, the system's metadata role.
+    public static func eyebrow(_ size: CGFloat, weight: CGFloat = 500, width: CGFloat = 87.5) -> CTFont? {
+        guard let d = faces.eyebrow else { return nil }
+        return font(d, size, [wght: weight, wdth: width, ital: 0])
+    }
+
+    static func font(_ d: CTFontDescriptor, _ size: CGFloat, _ axes: [UInt32: CGFloat]) -> CTFont {
+        var desc = d
+        for (tag, value) in axes { desc = CTFontDescriptorCreateCopyWithVariation(desc, tag as CFNumber, value) }
+        return CTFontCreateWithFontDescriptor(desc, size, nil)
     }
 }
 
