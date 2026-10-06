@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.0.1 (unreleased)
+## 3.0.1 (2026-10-06)
 
 - In a Reel with Safe margins, a slide held up to be read stays clear of the platform's buttons and caption. A featured slide stepping out, a zoom and the cover at the start now sit in the room the app's interface leaves, a little left of centre and a little smaller. In 3.0.0 they ran up to 111 px under the like and comment buttons. The grid stays centred, so its right-hand edge can still pass under the buttons. Other canvases change little or not at all.
 - `beat-lab`: a new check keeps a held-up slide clear of the platform's interface in a Reel, for 2576×1080 and 1920×1080 decks.
