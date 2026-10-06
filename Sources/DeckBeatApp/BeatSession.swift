@@ -214,20 +214,30 @@ final class BeatSession: StageSource {
         return "\(timecode(c.start))–\(timecode(c.start + c.length)) of the song, \(c.outro == .loop ? "looping" : "with its ending")."
     }
 
+    /// Each slide's own shape, in deck order.
+    var slideAspects: [Float] { project.slides.map { textures[$0.id]?.aspect ?? $0.aspect } }
+
     /// The slides' usual shape.
-    var slideAspect: Float {
-        Composer.typicalAspect(project.slides.map { textures[$0.id]?.aspect ?? $0.aspect })
-    }
+    var slideAspect: Float { Composer.typicalAspect(slideAspects) }
 
     var starred: Set<Int> { Set(project.slides.indices.filter { project.slides[$0].featured }) }
+
+    /// The cover's thumbnail: the first starred slide, or the first slide.
+    var coverThumbnail: CGImage? {
+        guard let cover = project.slides.first(where: \.featured) ?? project.slides.first else { return nil }
+        return thumbnails[cover.id]
+    }
 
     func planned(for format: CanvasFormat) -> Planned? {
         let aspect = Float(format.aspect)
         // Asked for several times a frame (stage, sound, transport): worked out once per change.
         if let m = plannedMemo[aspect], m.version == version { return m.planned }
         guard let analysis, !project.slides.isEmpty else { return nil }
-        let slideAspect = self.slideAspect
-        let clip = project.clip.resolve(analysis, settings: project.settings, landOnDrop: project.landOnDrop)
+        let aspects = slideAspects
+        let slideAspect = Composer.typicalAspect(aspects)
+        let grid = project.settings.grid
+        let clip = project.clip.resolve(analysis, settings: project.settings, landOnDrop: project.landOnDrop,
+                                        cells: grid.cells(slides: project.slides.count))
         var h = Hasher()
         // The song's cache is cleared when the song changes; its corrections are part of the key.
         h.combine(project.beat)
@@ -235,6 +245,8 @@ final class BeatSession: StageSource {
         h.combine(clip)
         h.combine(aspect)
         h.combine(slideAspect)
+        // A collage gives every slide a cell of its own shape.
+        if grid.arrangement == .collage { h.combine(aspects) }
         h.combine(project.slides.count)
         h.combine(starred)
         let clear = Self.clearance(for: project, format: format)
@@ -245,7 +257,7 @@ final class BeatSession: StageSource {
             made = hit
         } else {
             made = Self.plan(analysis, settings: project.settings, clip: clip, aspect: aspect, slideAspect: slideAspect,
-                             slides: project.slides.count, starred: starred, clear: clear)
+                             slides: project.slides.count, aspects: aspects, starred: starred, clear: clear)
             if planCache.count > 24 { planCache.removeAll() }
             planCache[key] = made
         }
@@ -255,22 +267,23 @@ final class BeatSession: StageSource {
     }
 
     nonisolated static func plan(_ analysis: SongAnalysis, settings: BeatSettings, clip: ClipRange, aspect: Float, slideAspect: Float,
-                                 slides: Int, starred: Set<Int>, clear: Clearance) -> Planned {
+                                 slides: Int, aspects: [Float], starred: Set<Int>, clear: Clearance) -> Planned {
         let (layout, plan) = Composer.plan(analysis, settings: settings, clip: clip, aspect: aspect, slideAspect: slideAspect,
-                                           slides: slides, starred: starred, clear: clear)
+                                           slides: slides, aspects: aspects, starred: starred, clear: clear)
         return Planned(clip: clip, layout: layout, plan: plan, modulate: Atmosphere.modulate(plan: plan, atmosphere: settings.atmosphere))
     }
 
     /// What it takes to plan `p` on `format`, ready to be worked out off the main thread.
     func planJob(for p: BeatProject, format: CanvasFormat) -> (@Sendable () -> Planned)? {
         guard let analysis, !p.slides.isEmpty else { return nil }
-        let settings = p.settings, clip = p.clip, landOnDrop = p.landOnDrop, aspect = Float(format.aspect), slideAspect = slideAspect
+        let settings = p.settings, clip = p.clip, landOnDrop = p.landOnDrop, aspect = Float(format.aspect)
+        let aspects = p.slides.map { textures[$0.id]?.aspect ?? $0.aspect }, slideAspect = Composer.typicalAspect(aspects)
         let count = p.slides.count, starred = Set(p.slides.indices.filter { p.slides[$0].featured })
         let clear = Self.clearance(for: p, format: format)
         return {
-            let range = clip.resolve(analysis, settings: settings, landOnDrop: landOnDrop)
+            let range = clip.resolve(analysis, settings: settings, landOnDrop: landOnDrop, cells: settings.grid.cells(slides: count))
             return BeatSession.plan(analysis, settings: settings, clip: range, aspect: aspect, slideAspect: slideAspect, slides: count,
-                                    starred: starred, clear: clear)
+                                    aspects: aspects, starred: starred, clear: clear)
         }
     }
 
@@ -514,8 +527,9 @@ final class BeatSession: StageSource {
     /// around the caption it has now.
     static func refit(_ p: inout BeatProject) {
         guard p.gridFollowsDeck, !p.slides.isEmpty else { return }
+        let aspects = p.slides.map(\.aspect)
         p.settings.grid = p.settings.grid.fitted(count: p.slides.count, aspect: Float(p.format.aspect),
-                                                  slideAspect: Composer.typicalAspect(p.slides.map(\.aspect)),
+                                                  slideAspect: Composer.typicalAspect(aspects), aspects: aspects,
                                                   clear: clearance(for: p, format: p.format))
     }
 
@@ -743,12 +757,49 @@ final class BeatSession: StageSource {
 
     func usePreset(_ g: GridSettings) {
         update("Grid") { p in
+            p.settings.grid.arrangement = .grid
             p.settings.grid.columns = g.columns
             p.settings.grid.rows = g.rows
             p.settings.grid.shape = g.shape
             p.gridFollowsDeck = false
         }
     }
+
+    /// Grid or collage. A collage lays the slides in deck order and takes its
+    /// rows and columns from the deck; back to a grid, the grid refits to it.
+    func setArrangement(_ a: Arrangement) {
+        update(a == .collage ? "Collage" : "Grid") { p in
+            p.settings.grid.arrangement = a
+            if a == .collage {
+                p.settings.grid.order = .reading
+            } else {
+                let aspects = p.slides.map(\.aspect)
+                let f = BeatKit.GridLayout.fit(count: max(p.slides.count, 1), aspect: Float(p.format.aspect),
+                                       slideAspect: Composer.typicalAspect(aspects), base: p.settings.grid,
+                                       clear: Self.clearance(for: p, format: p.format))
+                p.settings.grid.columns = f.columns
+                p.settings.grid.rows = f.rows
+                p.settings.grid.shape = .auto
+            }
+        }
+        rewind()
+    }
+
+    /// How the board comes in. Moving to a build opens on the empty room.
+    func setPace(_ pace: IntroPace) {
+        update("Build") { p in
+            if pace.builds, !p.settings.intro.pace.builds { p.settings.intro.coldOpen = false }
+            p.settings.intro.pace = pace
+        }
+        rewind()
+    }
+
+    func useStates(_ preset: StatePreset) {
+        update(preset.name) { preset.apply(&$0.settings) }
+    }
+
+    /// Distinct slide shapes in the deck, widest over narrowest more than 30 % apart.
+    var mixedShapes: Bool { BeatKit.GridLayout.isMixed(slideAspects) }
 
     /// Cells too small to read with nothing stepping forward.
     var hardToRead: Bool {

@@ -111,7 +111,7 @@ public enum LookMoves {
 
     /// Mosaic: a wall of fifty slides or more. Rings of light cross it, it
     /// builds on every hit, the camera reads one every four bars, and the
-    /// slides take a curtain call. Every slide stays on the wall.
+    /// slides take a curtain call.
     public static func mosaic(_ s: inout BeatSettings) {
         s.mode = .ripple
         s.spread = 0.6
@@ -129,7 +129,6 @@ public enum LookMoves {
         s.feature = .fourBars
         s.featureStyle = .zoom
         s.dropMove = .light
-        s.grid.rotate = false
     }
 
     /// Afterglow: slow and warm. A gentle pulse brings slides into focus,

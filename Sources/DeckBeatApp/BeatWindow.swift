@@ -316,6 +316,9 @@ struct SongCard: View {
 /// `--feature zoom`, `--turn blinds`, `--entrance page` and `--room 0.8` try
 /// the moves, and `--grid 3x5` sets the grid by hand; `--time drop:0.4` times the still from a moment of the plan.
 /// `--background transparent` leaves the backdrop out (the still shows a checkerboard in its place).
+/// New in 6.0: `--deck mixed` drops in slides of five shapes; `--pace beats|hits`, `--outro curtainCall`,
+/// `--states neon`, `--loose 0.5`, `--margins clear`, `--arrangement collage` and `--feel 0.6` set
+/// the new choices; `--time build:0.5` is halfway through a build and `--time end:-1` a second before the end.
 struct BeatSnapshotHost: ViewModifier {
     let session: BeatSession
     @State private var still: CGImage?
@@ -381,6 +384,13 @@ struct BeatSnapshotHost: ViewModifier {
         if let g = StudioSnapshot.arg("--grid")?.split(separator: "x").compactMap({ Int($0) }), g.count == 2 {
             session.setGrid(columns: g[0], rows: g[1])
         }
+        if let v = StudioSnapshot.arg("--pace").flatMap(IntroPace.init(rawValue:)) { session.setPace(v) }
+        if let v = StudioSnapshot.arg("--outro").flatMap(Outro.init(rawValue:)) { session.update("Ending") { $0.settings.outro = v } }
+        if let v = StudioSnapshot.arg("--states").flatMap(StatePreset.preset) { session.useStates(v) }
+        if let v = StudioSnapshot.arg("--loose").flatMap(Float.init) { session.update("Loose") { $0.settings.loose = v } }
+        if let v = StudioSnapshot.arg("--feel").flatMap(Float.init) { session.update("Feel") { $0.settings.motion.feel = v } }
+        if let v = StudioSnapshot.arg("--margins").flatMap(Margins.init(rawValue:)) { session.update("Margins") { $0.settings.grid.margins = v } }
+        if let v = StudioSnapshot.arg("--arrangement").flatMap(Arrangement.init(rawValue:)) { session.setArrangement(v) }
         if let c = StudioSnapshot.arg("--clip").flatMap(Int.init).flatMap(ClipLength.init(rawValue:)) { session.setClip(c) }
         session.clock.playing = false
         session.clock.time = Self.time(StudioSnapshot.arg("--time"), session: session) ?? 3
@@ -388,8 +398,9 @@ struct BeatSnapshotHost: ViewModifier {
         let f = session.project.format
         if let layout = session.planned(for: f)?.layout {
             let cell = layout.cells[0].size / layout.px
-            print(String(format: "layout: %d slides of %.2f:1 on %d×%d %@ cells, %.0f×%.0f px, %.0f%% of each cropped", session.project.slides.count,
-                         session.slideAspect, layout.columns, layout.rows, layout.shape.rawValue as NSString, cell.x, cell.y, layout.crop * 100))
+            print(String(format: "layout: %d slides of %.2f:1 on %d×%d %@ cells (%@), %.0f×%.0f px, %.0f%% of each cropped", session.project.slides.count,
+                         session.slideAspect, layout.columns, layout.rows, layout.shape.rawValue as NSString,
+                         layout.arrangement.rawValue as NSString, cell.x, cell.y, layout.crop * 100))
         }
         if let comp = session.composition() {
             // A transparent project shows over a checkerboard, as on the stage.
@@ -435,6 +446,11 @@ extension BeatSnapshotHost {
         case "swap":
             let first = plan.swaps.flatMap { $0 }.map(\.time).filter { $0 > plan.intro.end }.min()
             return first.map { $0 + after }
+        case "build":
+            let i = plan.intro
+            return i.buildStart + (i.end - i.buildStart) * min(max(after, 0), 1)
+        case "end": return plan.length + after
+        case "outro": return plan.outro.start + after
         case "word":
             guard let title = session.project.title else { return nil }
             let cues = WordTiming.cues(title, plan: plan)
@@ -444,14 +460,16 @@ extension BeatSnapshotHost {
         }
     }
 
-    /// The sample deck drawn at 2576 × 1080 (`wide`) or 1920 × 1080 (`hd`), as PNG files to drop in.
+    /// The sample deck drawn at 2576 × 1080 (`wide`) or 1920 × 1080 (`hd`), or in five shapes from
+    /// wide to tall (`mixed`), as PNG files to drop in.
     static func writeDeck(_ kind: String, count: Int) -> [URL] {
-        let size = kind == "hd" ? (w: 1920, h: 1080) : (w: 2576, h: 1080)
+        let mixed = [(w: 2576, h: 1080), (w: 1920, h: 1080), (w: 1080, h: 1080), (w: 1080, h: 1350), (w: 1920, h: 1080), (w: 1080, h: 1920)]
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("deck-beat-\(kind)-deck", isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return (0..<max(1, count)).compactMap { i in
             let url = dir.appendingPathComponent(String(format: "Slide %02d.png", i + 1))
+            let size = kind == "mixed" ? mixed[i % mixed.count] : kind == "hd" ? (w: 1920, h: 1080) : (w: 2576, h: 1080)
             let rep = NSBitmapImageRep(cgImage: DemoDeck.slide(index: i, width: size.w, height: size.h, number: i + 1))
             guard let data = rep.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil else { return nil }
             return url

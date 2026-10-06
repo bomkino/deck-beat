@@ -82,6 +82,20 @@ jobs:
           # stepping out of the grid and as the cover at the start.
           still fix-lift --deck wide --slides 15 --feature lift --time feature:0.5
           still fix-cover --deck wide --slides 15 --time 0.2
+          # 6.0: the board building on the beat from the empty room, then on every hit across a
+          # 60-slide Mosaic; slides answering by their own sound; the three new endings; a collage
+          # of mixed shapes; Paste-up; and Beat by Beat over a transparent background.
+          still v6-build --look beat-by-beat --deck hd --slides 15 --time build:0.55
+          still v6-hits --look mosaic --deck hd --slides 60 --time build:0.7
+          still v6-voices --look beat-by-beat --deck hd --slides 15 --time drop:2.1
+          still v6-mosaic --look mosaic --deck hd --slides 60 --time drop:3.3
+          still v6-leave --look beat-by-beat --deck hd --slides 15 --time end:-1.6
+          still v6-curtain --look beat-by-beat --deck hd --slides 15 --outro curtainCall --time end:-2.4
+          still v6-drift --look afterglow --deck wide --slides 15 --time end:-1.8
+          still v6-collage --deck mixed --slides 15 --time 9
+          still v6-paste-up --look paste-up --deck mixed --slides 18 --time 11
+          still v6-clear --look beat-by-beat --deck wide --slides 15 --margins clear --time 12
+          still v6-transparent --look beat-by-beat --deck hd --slides 15 --background transparent --time drop:1.5
           # The whole window, inspector and transport included, once it has settled,
           # and the screen as the runner shows it, which also catches glass and vibrancy.
           perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1220x720 --time 2 --settle 10 \
@@ -91,10 +105,18 @@ jobs:
           screencapture -x lab-output/app-screen.png || echo "screencapture: not allowed on this runner"
           wait
           cat "$RUNNER_TEMP/app.log"
+          # The inspector's new pages: idle and active presets, and the ways in and out.
+          for page in cells intro; do
+            perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot "lab-output/app-window-$page.png" --size 1220x900 --time 2 --settle 10 \
+              --look beat-by-beat --deck hd --slides 15 --page "$page" > "$RUNNER_TEMP/app-$page.log" 2>&1 || true
+            cat "$RUNNER_TEMP/app-$page.log"
+          done
           # Small copies in the log, for reviewers who can't download the artifact.
           for f in app-window app-screen app-still-wide app-still-hd app-still-hd-caption \
                    app-v3-fan app-v3-tunnel app-v3-strip app-v3-weave app-v3-zoom app-v3-blinds app-v3-words \
-                   app-fix-lift app-fix-cover; do
+                   app-fix-lift app-fix-cover app-window-cells app-window-intro \
+                   app-v6-build app-v6-hits app-v6-voices app-v6-mosaic app-v6-leave app-v6-curtain app-v6-drift \
+                   app-v6-collage app-v6-paste-up app-v6-clear app-v6-transparent; do
             [ -s "lab-output/$f.png" ] || continue
             sips -s format jpeg -s formatOptions 70 -Z 1200 "lab-output/$f.png" --out "$RUNNER_TEMP/$f.jpg" >/dev/null
             echo "thumbnail: $f.jpg"

@@ -144,14 +144,15 @@ enum Render {
         if let grid { settings.grid = grid(settings.grid) }
         tweak?(&settings)
         let aspects = media.map(\.aspect)
-        let range = clip.resolve(song.analysis, settings: settings)
+        let range = clip.resolve(song.analysis, settings: settings, cells: settings.grid.cells(slides: media.count))
         var clear = Clearance.none
         if let title, title.timing == .throughout {
             let reach = TitleArt.reach(title, width: canvas.w, height: canvas.h)
             clear = Clearance(top: Float(reach.top), bottom: Float(reach.bottom))
         }
         let (layout, plan) = Composer.plan(song.analysis, settings: settings, clip: range, aspect: aspect,
-                                           slideAspect: Composer.typicalAspect(aspects), slides: media.count, clear: clear)
+                                           slideAspect: Composer.typicalAspect(aspects), slides: media.count, aspects: aspects,
+                                           clear: clear)
         var comp = Composer.composition(plan: plan, layout: layout, settings: settings, stage: look.stage, backdrop: look.backdrop(nil),
                                         textures: media.map(\.texture), aspects: aspects, canvasAspect: aspect)
         if let title { comp.overlay = TitleArt.overlay(title, light: true, cues: WordTiming.cues(title, plan: plan)) }

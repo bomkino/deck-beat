@@ -410,6 +410,12 @@ extension GridLayout {
 @inline(__always) func simdLength(_ v: SIMD2<Float>) -> Float { (v.x * v.x + v.y * v.y).squareRoot() }
 
 public extension GridSettings {
+    /// How many cards a deck of `slides` gets: the grid's cells, or one for
+    /// each slide (up to 100) in a collage.
+    func cells(slides: Int) -> Int {
+        arrangement == .collage ? min(max(slides, 1), Self.collageLimit) : cellCount
+    }
+
     /// This grid refitted to a deck of `count` slides of `slideAspect` on a
     /// canvas of `aspect`. The shape stays Auto wherever Auto already lands on
     /// the fitted shape, so the grid keeps working across canvas formats.

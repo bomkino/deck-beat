@@ -10,8 +10,8 @@ enum InspectorPage: String, CaseIterable, Identifiable {
         switch self {
         case .beat: return "Beat"
         case .grid: return "Grid"
-        case .cells: return "Cells"
-        case .intro: return "Intro"
+        case .cells: return "Slides"
+        case .intro: return "In & out"
         case .title: return "Title"
         case .stage: return "Stage"
         }
@@ -32,7 +32,7 @@ struct BeatInspector: View {
                     switch InspectorPage(rawValue: page) ?? .beat {
                     case .beat: BeatPage(session: session)
                     case .grid: GridPage(session: session)
-                    case .cells: CellsPage(session: session)
+                    case .cells: SlidesPage(session: session)
                     case .intro: IntroPage(session: session)
                     case .title: TitlePage(session: session)
                     case .stage: StagePage(session: session)
@@ -134,11 +134,11 @@ struct BeatPage: View {
             Hairline().padding(.horizontal, 16)
             InspectorSection("Slides") {
                 VStack(spacing: 4) {
-                    r.slider("Rest light", \.settings.rest.brightness, 0...1.5, reset: 0.4)
-                    r.slider("Rest colour", \.settings.rest.colour, 0...1.3, reset: 0.2)
-                    r.slider("Lit size", \.settings.lit.scale, 0.5...1.5, reset: 1.06, format: times)
-                    r.slider("Lit lift", \.settings.lit.lift, -0.1...0.15, reset: 0.04, format: { String(format: "%.2f", $0) })
-                    r.slider("Lit glow", \.settings.lit.glow, reset: 0.25)
+                    r.slider("Idle light", \.settings.rest.brightness, 0...1.5, reset: 0.4)
+                    r.slider("Idle colour", \.settings.rest.colour, 0...1.3, reset: 0.2)
+                    r.slider("Active size", \.settings.lit.scale, 0.5...1.5, reset: 1.06, format: times)
+                    r.slider("Active lift", \.settings.lit.lift, -0.1...0.15, reset: 0.04, format: { String(format: "%.2f", $0) })
+                    r.slider("Active glow", \.settings.lit.glow, reset: 0.25)
                     r.seconds("Tail", \.settings.motion.release, 0.25...4, reset: 1, format: { String(format: "%.2g beat%@", $0, $0 == 1 ? "" : "s") })
                     r.choice("Idle", \.settings.motion.idle, IdleMotion.allCases.map { ($0, $0.title) })
                         .padding(.top, 4)
@@ -221,7 +221,7 @@ struct SongBeatSection: View {
     }
 }
 
-/// The seven looks, each shown on this deck and song.
+/// The looks, each shown on this deck and song.
 struct LookStrip: View {
     let session: BeatSession
 
@@ -313,19 +313,29 @@ struct GridPage: View {
     var body: some View {
         let r = Rows(session: session)
         let g = session.project.settings.grid
+        let collage = g.arrangement == .collage
         VStack(spacing: 0) {
+            InspectorSection("Arrangement") {
+                ChoiceRow([(Arrangement.grid, "Grid"), (.collage, "Collage")],
+                          selection: Binding(get: { g.arrangement }, set: { session.setArrangement($0) }))
+                Text(arrangementNote(collage: collage))
+                    .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+            }
+            Hairline().padding(.horizontal, 16)
             InspectorSection("Size") {
-                // Sizes of about 15, 24, 30 and 60 cells, shaped for these slides: wide slides get more rows.
-                let presets = presets(for: session)
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
-                    ForEach(presets, id: \.self) { p in
-                        let on = g.columns == p.columns && g.rows == p.rows
-                        Button { session.usePreset(p) } label: {
-                            Text("\(p.columns)×\(p.rows) · \(p.columns * p.rows)").textStyle(.caption).foregroundStyle(on ? Color.primary : Color.secondary)
-                                .frame(maxWidth: .infinity).frame(height: 26)
-                                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? Theme.segmentOn : Theme.well.opacity(0.7)))
+                if !collage {
+                    // Sizes of about 15, 30, 60 and 100 cells, shaped for these slides: wide slides get more rows.
+                    let presets = presets(for: session)
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
+                        ForEach(presets, id: \.self) { p in
+                            let on = g.columns == p.columns && g.rows == p.rows
+                            Button { session.usePreset(p) } label: {
+                                Text("\(p.columns)×\(p.rows) · \(p.columns * p.rows)").textStyle(.caption).foregroundStyle(on ? Color.primary : Color.secondary)
+                                    .frame(maxWidth: .infinity).frame(height: 26)
+                                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? Theme.segmentOn : Theme.well.opacity(0.7)))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 HStack(spacing: 6) {
@@ -336,35 +346,44 @@ struct GridPage: View {
                         Spacer(minLength: 0)
                         Label("Follows the deck", systemImage: "checkmark").labelStyle(.titleAndIcon)
                             .textStyle(.caption).foregroundStyle(.tertiary)
-                            .help("The grid refits as you add or remove slides, until you set its size by hand")
+                            .help("The layout refits as you add or remove slides, until you set its size by hand")
                     }
                 }
-                HStack {
-                    Stepper(value: Binding(get: { g.columns }, set: { session.setGrid(columns: $0, rows: g.rows) }), in: GridSettings.columnRange) {
-                        Text("\(g.columns) across").textStyle(.bodyCompact).monospacedDigit()
-                    }
-                    Spacer()
-                    Stepper(value: Binding(get: { g.rows }, set: { session.setGrid(columns: g.columns, rows: $0) }), in: GridSettings.rowRange) {
-                        Text("\(g.rows) down").textStyle(.bodyCompact).monospacedDigit()
+                if !collage {
+                    HStack {
+                        Stepper(value: Binding(get: { g.columns }, set: { session.setGrid(columns: $0, rows: g.rows) }), in: GridSettings.columnRange) {
+                            Text("\(g.columns) across").textStyle(.bodyCompact).monospacedDigit()
+                        }
+                        Spacer()
+                        Stepper(value: Binding(get: { g.rows }, set: { session.setGrid(columns: g.columns, rows: $0) }), in: GridSettings.rowRange) {
+                            Text("\(g.rows) down").textStyle(.bodyCompact).monospacedDigit()
+                        }
                     }
                 }
                 VStack(spacing: 4) {
                     r.slider("Gap", \.settings.grid.gap, 0...80, reset: 20, format: px)
                     r.slider("Corners", \.settings.grid.corner, 0...40, reset: 12, format: px)
+                    r.slider("Loose", \.settings.loose, reset: 0)
                 }
+                Text("Loose pins each slide up a little crooked and off its mark, like prints on a wall. A slide that steps forward straightens up to be read.")
+                    .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
             Hairline().padding(.horizontal, 16)
             InspectorSection("Shape") {
                 VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Cells").textStyle(.bodyCompact).foregroundStyle(.secondary)
-                        ChoiceRow(CellShape.allCases.map { ($0, $0.title) }, selection: Binding(get: { g.shape }, set: { session.setShape($0) }))
-                    }
-                    if let layout = session.planned(for: session.project.format)?.layout {
-                        Text(shapeNote(layout, auto: g.shape == .auto))
-                            .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                    if !collage {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Cells").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                            ChoiceRow(CellShape.allCases.map { ($0, $0.title) }, selection: Binding(get: { g.shape }, set: { session.setShape($0) }))
+                        }
+                        if let layout = session.planned(for: session.project.format)?.layout {
+                            Text(shapeNote(layout, auto: g.shape == .auto))
+                                .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     r.choice("Margins", \.settings.grid.margins, Margins.allCases.map { ($0, $0.title) })
+                    Text(marginNote(g.margins))
+                        .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                     r.choice("Wall", \.settings.grid.wall, [(Wall.flat, "Flat"), (Wall.lean, "Lean"), (Wall.angle, "Angle")])
                     r.slider("Mirror floor", \.settings.grid.wall.reflection, 0...0.5, reset: 0)
                     if session.project.transparent, g.wall.reflection > 0.001 {
@@ -375,7 +394,12 @@ struct GridPage: View {
             }
             Hairline().padding(.horizontal, 16)
             InspectorSection("Order") {
-                r.choice("", \.settings.grid.order, SlideOrder.allCases.map { ($0, $0.title) })
+                if collage {
+                    Text("A collage keeps the deck's own order, so each slide sits in a cell cut to its shape. Drag slides in the rail to reorder them.")
+                        .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    r.choice("", \.settings.grid.order, SlideOrder.allCases.map { ($0, $0.title) })
+                }
                 Text("Star a slide to make it the cover: it opens and closes the video, and steps forward twice as often.")
                     .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
@@ -384,10 +408,32 @@ struct GridPage: View {
 }
 
 extension GridPage {
-    /// About 15, 24, 30 and 60 cells, each fitted to the deck's slide shape, without repeats.
+    /// About 15, 30, 60 and 100 cells, each fitted to the deck's slide shape, without repeats.
     func presets(for session: BeatSession) -> [GridSettings] {
         var seen = Set<Int>()
-        return [15, 24, 30, 60].map { session.gridPreset(about: $0) }.filter { seen.insert($0.columns * 100 + $0.rows).inserted }
+        return [15, 30, 60, 100].map { session.gridPreset(about: $0) }.filter { seen.insert($0.columns * 100 + $0.rows).inserted }
+    }
+
+    func arrangementNote(collage: Bool) -> String {
+        let count = session.project.slides.count
+        if collage {
+            let over = count > GridSettings.collageLimit
+                ? " With more than \(GridSettings.collageLimit) slides, the rest turn over into its cells." : ""
+            return "Every slide whole, at its own shape, laid in rows or columns that fill the frame." + over
+        }
+        if session.mixedShapes, count <= GridSettings.collageLimit {
+            return "Your slides come in different shapes. Collage keeps each one whole, at its own shape, with no letterboxing."
+        }
+        return "Every cell the same shape. For slides of mixed shapes, Collage keeps each one whole at its own shape."
+    }
+
+    func marginNote(_ m: Margins) -> String {
+        switch m {
+        case .safe: return "Inside the safe area of a Reel or Story."
+        case .clear: return "Also clear of Instagram's buttons down the right and the caption at the foot, so nothing hides behind them."
+        case .even: return "The same room on every side."
+        case .bleed: return "Out to the edges of the frame."
+        }
     }
 
     func shapeNote(_ layout: BeatKit.GridLayout, auto: Bool) -> String {
@@ -400,20 +446,33 @@ extension GridPage {
     }
 }
 
-// MARK: - Cells
+// MARK: - Slides
 
-struct CellsPage: View {
+struct SlidesPage: View {
     let session: BeatSession
-    @State private var lit = true
+    @State private var active = true
 
     var body: some View {
         let r = Rows(session: session)
-        let state: WritableKeyPath<BeatProject, CellState> = lit ? \.settings.lit : \.settings.rest
-        let d = lit ? CellState.lit : CellState.rest
+        let state: WritableKeyPath<BeatProject, CellState> = active ? \.settings.lit : \.settings.rest
+        let d = active ? CellState.lit : CellState.rest
+        let settings = session.project.settings
         VStack(spacing: 0) {
-            InspectorSection(lit ? "Lit" : "At rest") {
-                ChoiceRow([(false, "Rest"), (true, "Lit")], selection: $lit)
-                Text(lit ? "How a slide looks when the music lights it." : "How a slide waits for the music.")
+            InspectorSection("Idle and active") {
+                Text("How a slide waits for the music, and how it looks when the music finds it.")
+                    .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                    ForEach(StatePreset.all) { preset in
+                        StatePresetCard(preset: preset, cover: session.coverThumbnail, selected: preset.matches(settings)) {
+                            session.useStates(preset)
+                        }
+                    }
+                }
+            }
+            Hairline().padding(.horizontal, 16)
+            InspectorSection(active ? "Active" : "Idle") {
+                ChoiceRow([(false, "Idle"), (true, "Active")], selection: $active)
+                Text(active ? "How a slide looks when the music lights it." : "How a slide waits for the music.")
                     .textStyle(.caption).foregroundStyle(.tertiary)
                 VStack(spacing: 4) {
                     r.slider("Size", state.appending(path: \.scale), 0.5...1.5, reset: d.scale, format: times)
@@ -426,13 +485,14 @@ struct CellsPage: View {
                     r.slider("Shadow", state.appending(path: \.shadow), 0...2, reset: d.shadow, format: times)
                     r.slider("Tilt", state.appending(path: \.tilt), 0...12, reset: d.tilt, format: degrees)
                     r.slider("Tint", state.appending(path: \.tint), reset: d.tint)
-                    if lit { r.slider("Open", state.appending(path: \.open), reset: 0) }
+                    if active { r.slider("Open", state.appending(path: \.open), reset: 0) }
                 }
                 TintSwatches(session: session, path: state.appending(path: \.tintColour))
             }
             Hairline().padding(.horizontal, 16)
             InspectorSection("Motion") {
                 VStack(spacing: 4) {
+                    r.slider("Feel", \.settings.motion.feel, reset: 0, format: { $0 < 0.005 ? "Tight" : "\(Int(($0 * 100).rounded()))% human" })
                     r.seconds("Attack", \.settings.motion.attack, 0...0.2, reset: 0.05, format: { "\(Int(($0 * 1000).rounded())) ms" })
                     r.seconds("Hold", \.settings.motion.hold, 0...0.5, reset: 0.25, format: { String(format: "%.2g beat", $0) })
                     r.seconds("Tail", \.settings.motion.release, 0.25...4, reset: 1, format: { String(format: "%.2g beat%@", $0, $0 == 1 ? "" : "s") })
@@ -441,8 +501,69 @@ struct CellsPage: View {
                         .padding(.vertical, 4)
                     r.slider("Idle amount", \.settings.motion.idleAmount, reset: 0.25)
                 }
+                Text("Feel: tight moves every slide alike. Human gives each one its own pace coming in and going out, and its own breath at rest. The landings stay on the beat.")
+                    .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+/// An idle and active pair, drawn on the cover: idle on the left, active on the right.
+struct StatePresetCard: View {
+    let preset: StatePreset
+    let cover: CGImage?
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 0) {
+                    StateChip(state: preset.idle, cover: cover).frame(maxWidth: .infinity)
+                    Image(systemName: "arrow.right").font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
+                    StateChip(state: preset.active, cover: cover).frame(maxWidth: .infinity)
+                }
+                .frame(height: 50)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.black.opacity(0.85)))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(selected ? Theme.accent : Theme.hairline, lineWidth: selected ? 2 : 1))
+                Text(preset.name).textStyle(.caption).foregroundStyle(selected ? Theme.accentInk : .secondary).lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(preset.summary)
+    }
+}
+
+/// A small slide in one state: its size, light, colour, softness, glow and gel.
+struct StateChip: View {
+    let state: CellState
+    let cover: CGImage?
+
+    var body: some View {
+        let light = Double(state.brightness)
+        let tint = Color(nsColor: NSColor(hex: UInt32(state.tintColour.dropFirst(), radix: 16) ?? 0xFFFFFF))
+        ZStack {
+            if let cover {
+                Image(decorative: cover, scale: 1).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                LinearGradient(colors: [Color(red: 0.95, green: 0.42, blue: 0.36), Color(red: 0.32, green: 0.45, blue: 0.95)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+            tint.opacity(Double(state.tint) * 0.7).blendMode(.color)
+        }
+        .frame(width: 40, height: 24)
+        .saturation(Double(min(state.colour, 1.3)))
+        .colorMultiply(Color(white: min(light, 1)))
+        .brightness(max(light - 1, 0) * 0.4)
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .blur(radius: CGFloat(state.blur) / 5)
+        .opacity(Double(state.opacity))
+        .shadow(color: .white.opacity(Double(state.glow) * 0.7), radius: CGFloat(state.glow) * 8)
+        .scaleEffect(CGFloat(state.scale))
+        .rotationEffect(.degrees(Double(-state.tilt) * 0.6))
+        .offset(y: CGFloat(-state.lift) * 40)
     }
 }
 
@@ -470,7 +591,7 @@ struct TintSwatches: View {
     }
 }
 
-// MARK: - Intro
+// MARK: - In and out
 
 struct IntroPage: View {
     let session: BeatSession
@@ -478,26 +599,28 @@ struct IntroPage: View {
     var body: some View {
         let r = Rows(session: session)
         let intro = session.project.settings.intro
+        let outro = session.project.settings.outro
+        let two = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
         VStack(spacing: 0) {
-            InspectorSection("Opening") {
+            InspectorSection("Coming in") {
                 VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("The board comes in").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                        ChoiceRow(IntroPace.allCases.map { ($0, $0.title) },
+                                  selection: Binding(get: { intro.pace }, set: { session.setPace($0) }))
+                        Text(intro.pace.summary).textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                    }
                     r.toggle("Open on the cover", \.settings.intro.coldOpen,
-                             help: "Frame 0 is the cover, large and lit; the deck deals out from behind it")
-                    Text("Cards").textStyle(.bodyCompact).foregroundStyle(.secondary)
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
+                             help: intro.pace.builds
+                                ? "Frame 0 is the cover, large and lit; the board builds round it"
+                                : "Frame 0 is the cover, large and lit; the deck deals out from behind it")
+                    Text("Each slide").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                    LazyVGrid(columns: two, spacing: 6) {
                         ForEach(Entrance.allCases) { e in
-                            let on = intro.entrance == e
-                            Button { session.update("Entrance") { $0.settings.intro.entrance = e }; session.rewind() } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(e.title).textStyle(.label).foregroundStyle(on ? Color.primary : Color.secondary)
-                                    Text(e.summary).textStyle(.caption).foregroundStyle(.tertiary).lineLimit(2)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
-                                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(on ? Theme.segmentOn : Theme.well.opacity(0.6)))
+                            OptionCard(title: e.title, summary: e.summary, selected: intro.entrance == e) {
+                                session.update("Entrance") { $0.settings.intro.entrance = e }
+                                session.rewind()
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     Picker(selection: Binding(get: { intro.order }, set: { v in session.update("Order") { $0.settings.intro.order = v }; session.rewind() })) {
@@ -505,26 +628,65 @@ struct IntroPage: View {
                     } label: {
                         Text("Order").textStyle(.bodyCompact).foregroundStyle(.secondary)
                     }
-                    r.choice("Length", \.settings.intro.bars, [(0, "Auto"), (1, "1 bar"), (2, "2 bars"), (4, "4 bars")])
-                    r.toggle("Land the cover on an early drop", \.landOnDrop,
-                             help: "When a drop comes in the clip's first bars, the clip starts so the cover lands on it")
+                    if intro.pace.builds {
+                        r.choice("Length", \.settings.intro.bars, [(0, "Auto"), (2, "2 bars"), (4, "4 bars"), (8, "8 bars")])
+                        Text("Auto gives the build a bar for every four slides, two bars to eight, and lands the last slide on the song's drop when one comes in time.")
+                            .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        r.choice("Length", \.settings.intro.bars, [(0, "Auto"), (1, "1 bar"), (2, "2 bars"), (4, "4 bars")])
+                    }
+                    r.toggle("Land on an early drop", \.landOnDrop,
+                             help: "When a drop comes in the clip's first bars, the clip starts so the cover (or the last slide of a build) lands on it")
                 }
             }
             Hairline().padding(.horizontal, 16)
-            InspectorSection("Ending") {
-                r.choice("", \.settings.outro, Outro.allCases.map { ($0, $0.title) })
+            InspectorSection("Going out") {
+                LazyVGrid(columns: two, spacing: 6) {
+                    ForEach([Outro.auto, .leave, .curtainCall, .driftAway, .loop, .close, .lightsOut, .none]) { o in
+                        OptionCard(title: o.title, summary: o.summary, symbol: o.symbol, selected: outro == o) {
+                            session.update("Ending") { $0.settings.outro = o }
+                        }
+                    }
+                }
                 Text(endingNote).textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
+    /// What the clip as it stands does at the end, naming Auto's choice.
     private var endingNote: String {
-        switch session.clip?.outro ?? .loop {
-        case .loop: return "The cards gather back into the cover, so the last frame meets the first and the video loops."
-        case .close: return "The cards leave in reverse and the cover rises to hold the last moment."
-        case .lightsOut: return "The slides go dark one by one; the cover stays lit to the end."
-        default: return "The grid plays to the last frame."
+        guard let clip = session.clip else { return "" }
+        let seconds = Int(clip.length.rounded())
+        let lead = session.project.settings.outro == .auto ? "Auto chose \(clip.outro.title) for this \(seconds)-second clip. " : ""
+        return lead + (clip.outro.loops ? "The last frame meets the first, so the video loops." : "The video ends on its last frame.")
+    }
+}
+
+/// A choice with a line about what it does, for entrances and endings.
+struct OptionCard: View {
+    let title: String
+    let summary: String
+    var symbol: String? = nil
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .semibold)) }
+                    Text(title).textStyle(.label).lineLimit(1)
+                }
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                Text(summary).textStyle(.caption).foregroundStyle(.tertiary).lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? Theme.segmentOn : Theme.well.opacity(0.6)))
         }
+        .buttonStyle(.plain)
+        .help(summary)
     }
 }
 
@@ -532,9 +694,8 @@ struct IntroPage: View {
 
 struct StagePage: View {
     let session: BeatSession
-
-    static let backdrops = ["studio", "solid", "linear", "radial", "conic", "softbloom", "mesh", "fade", "aurora", "halo", "bloom", "bokeh",
-                            "silk", "iris", "caustics", "smoke", "dotgrid", "halftone"]
+    /// The family of backdrops on show; the current style's until another is picked.
+    @State private var family: BackdropFamily?
 
     /// A backdrop style's tile, painted in the project's palette.
     static func preview(_ style: BackdropStyle, palette: Palette) -> BackdropSettings {
@@ -558,9 +719,30 @@ struct StagePage: View {
             }
             Hairline().padding(.horizontal, 16)
             InspectorSection("Backdrop") {
+                let shown = family ?? b.styleInfo.family
+                HStack(spacing: 2) {
+                    ForEach(BackdropFamily.allCases) { f in
+                        let on = f == shown
+                        Button { family = f } label: {
+                            Image(systemName: f.symbol).font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(on ? Color.primary : Color.secondary)
+                                .frame(maxWidth: .infinity).frame(height: 24)
+                                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(on ? Theme.segmentOn : Color.clear))
+                                .overlay(alignment: .topTrailing) {
+                                    if f == b.styleInfo.family, !on { Circle().fill(Theme.accent).frame(width: 4, height: 4).padding(3) }
+                                }
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(f.title)
+                    }
+                }
+                .padding(2)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.well.opacity(0.7)))
+                Text(shown.title).textStyle(.caption).foregroundStyle(.secondary)
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                    ForEach(Self.backdrops, id: \.self) { id in
-                        let style = BackdropCatalog.style(id)
+                    ForEach(BackdropCatalog.styles.filter { $0.family == shown }, id: \.id) { style in
+                        let id = style.id
                         BackdropTile(settings: Self.preview(style, palette: b.palette), title: style.name, selected: b.style == id, size: CGSize(width: 82, height: 52)) {
                             session.update("Backdrop") { p in
                                 let palette = p.backdrop.palette

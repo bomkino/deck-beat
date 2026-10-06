@@ -489,7 +489,7 @@ public enum Outro: String, Codable, CaseIterable, Identifiable, Sendable {
     }
     public var summary: String {
         switch self {
-        case .auto: return "Loop for 30 seconds or less, a close for longer clips."
+        case .auto: return "A loop for 30 seconds or less, a close for longer clips. A board that builds leaves on the beat, or takes a curtain call."
         case .loop: return "The cards gather back into the cover, so the last frame meets the first."
         case .close: return "The cards leave in reverse and the cover rises to hold the end."
         case .lightsOut: return "The slides go dark one by one; the cover goes last and holds."
