@@ -90,10 +90,16 @@ size="$(stat -f %z "$ZIP")"
 offset=$((size / 2))
 byte="$(dd if="$ZIP" bs=1 skip="$offset" count=1 2>/dev/null | xxd -p)"
 printf "$(printf '\\x%02x' $(( (0x$byte + 1) % 256 )))" | dd of="$ZIP" bs=1 seek="$offset" count=1 conv=notrunc 2>/dev/null
+before="$(grep -c "GET /$(basename "$ZIP")" "$WORK/server.log" || true)"
 run 9.0.1 40
 got="$(version)"
 if [ "$got" != "9.0.0" ]; then
   echo "tampered update: FAILED, it installed $got"; exit 1
 fi
-echo "tampered update: refused, the copy stays at 9.0.0"
+# It must have fetched the tampered ZIP and turned it down, not just never looked.
+after="$(grep -c "GET /$(basename "$ZIP")" "$WORK/server.log" || true)"
+if [ "$after" -le "$before" ]; then
+  echo "tampered update: inconclusive, the copy never fetched the ZIP"; cat "$WORK/server.log"; exit 1
+fi
+echo "tampered update: fetched and refused, the copy stays at 9.0.0"
 grep -i "signature\|error" "$WORK/app.log" | head -5 || true
