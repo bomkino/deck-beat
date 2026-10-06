@@ -45,24 +45,32 @@ else
 fi
 DOWNLOAD_URL="${DOWNLOAD_URL:-https://github.com/$REPO/releases/download/v$VERSION/}"
 
+# The app inside the ZIP: its version, and the public key it trusts.
+ditto -x -k "$DIR/$ZIP" "$work/app"
+PLIST="$(ls -d "$work"/app/*.app | head -1)/Contents/Info.plist"
+SHORT="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST")"
+PUBLIC="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$PLIST")"
+[ "$SHORT" = "$VERSION" ] || { echo "the ZIP holds $SHORT, not $VERSION"; exit 1; }
+
 # generate_appcast signs every archive in its folder, so it works in its own.
 mkdir -p "$work/cast"
 cp "$DIR/$ZIP" "$work/cast/"
 # Notes shown in the update window: a Markdown file named like the archive.
 if [ -n "$NOTES" ]; then cp "$NOTES" "$work/cast/${ZIP%.zip}.md"; fi
 "$SPARKLE_BIN/generate_appcast" --ed-key-file "$SPARKLE_KEY" --download-url-prefix "$DOWNLOAD_URL" \
-  --link "https://github.com/$REPO/releases" --embed-release-notes --maximum-versions 1 -o "$work/appcast.xml" "$work/cast" >/dev/null
+  --link "https://github.com/$REPO/releases" --embed-release-notes --maximum-versions 1 -o "$work/appcast.xml" "$work/cast" \
+  > "$work/generate.log" || { cat "$work/generate.log"; echo "generate_appcast failed"; exit 1; }
 grep -Eq "sparkle:shortVersionString(>|=\")${VERSION}[<\"]" "$work/appcast.xml" || { echo "appcast.xml doesn't name $VERSION"; exit 1; }
 grep -q "url=\"$DOWNLOAD_URL$ZIP\"" "$work/appcast.xml" || { echo "appcast.xml doesn't point at $DOWNLOAD_URL$ZIP"; exit 1; }
-SIG="$(grep -o 'sparkle:edSignature="[^"]*"' "$work/appcast.xml" | head -1 | cut -d'"' -f2)"
-[ -n "$SIG" ] || { echo "appcast.xml has no signature"; exit 1; }
+SIG="$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$work/appcast.xml" | head -1)"
+# Sparkle signs only with the key whose public half is in the app; with any
+# other key it warns and leaves the feed unsigned.
+if [ -z "$SIG" ]; then
+  grep -i "warning\|error" "$work/generate.log" || true
+  echo "the app wouldn't accept this feed: Sparkle left it unsigned. Is the key the one whose public half is $PUBLIC?"; exit 1
+fi
 
 # The check Sparkle makes: the signature against the public key inside the app.
-ditto -x -k "$DIR/$ZIP" "$work/app"
-PLIST="$(ls -d "$work"/app/*.app | head -1)/Contents/Info.plist"
-SHORT="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST")"
-PUBLIC="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$PLIST")"
-[ "$SHORT" = "$VERSION" ] || { echo "the ZIP holds $SHORT, not $VERSION"; exit 1; }
 cat > "$work/verify.swift" <<'SWIFT'
 import CryptoKit
 import Foundation
