@@ -31,7 +31,10 @@ jobs:
       - name: Run the beat-lab checks
         run: |
           "$(swift build -c release --show-bin-path)/beat-lab" check
-      - name: Render the contact sheet and demo clip
+      - name: Time listening and planning
+        run: |
+          "$(swift build -c release --show-bin-path)/beat-lab" bench
+      - name: Render the contact sheets, demo clip and export timings
         run: |
           "$(swift build -c release --show-bin-path)/beat-lab" render --out lab-output
       - name: Open the app, render a still and capture its window
@@ -41,16 +44,22 @@ jobs:
           mkdir -p lab-output
           # A new window with the sample deck and demo groove, rendered through the app's own session.
           perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still.png --look ripple --format reel --time 2
+          # Decks made for wide screens dropped into a new window, through the same import as a drop:
+          # 20 slides at 2576 × 1080, and 24 at 1920 × 1080 with a caption shown throughout.
+          perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still-wide.png --deck wide --slides 20 --format reel --time 9
+          perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still-hd-caption.png --deck hd --slides 24 --format reel --time 9 \
+            --title "Brightside raises its Series A" --kicker "pitch.dog · 2026" --caption
           # The whole window, inspector and transport included, once it has settled,
           # and the screen as the runner shows it, which also catches glass and vibrancy.
-          perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1220x720 --time 2 --settle 10 > "$RUNNER_TEMP/app.log" 2>&1 &
+          perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1220x720 --time 2 --settle 10 \
+            --deck wide --slides 20 --page grid > "$RUNNER_TEMP/app.log" 2>&1 &
           for i in $(seq 1 120); do grep -q "snapshot: ready" "$RUNNER_TEMP/app.log" && break; sleep 1; done
           sleep 4
           screencapture -x lab-output/app-screen.png || echo "screencapture: not allowed on this runner"
           wait
           cat "$RUNNER_TEMP/app.log"
           # Small copies in the log, for reviewers who can't download the artifact.
-          for f in app-window app-screen; do
+          for f in app-window app-screen app-still-wide app-still-hd-caption; do
             [ -s "lab-output/$f.png" ] || continue
             sips -s format jpeg -s formatOptions 70 -Z 1200 "lab-output/$f.png" --out "$RUNNER_TEMP/$f.jpg" >/dev/null
             echo "thumbnail: $f.jpg"

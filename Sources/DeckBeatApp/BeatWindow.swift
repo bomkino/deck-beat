@@ -303,11 +303,15 @@ struct SongCard: View {
 
 /// Headless stills for checks and docs:
 /// `DeckBeat --still out.png [--look id] [--format reel] [--mode pulse] [--clip 15] [--time 3]`,
-/// or `--snapshot window.png` for the whole window.
+/// or `--snapshot window.png` for the whole window. `--deck wide|hd [--slides 20]`
+/// drops in a deck of 2576 × 1080 or 1920 × 1080 slides first, through the
+/// same import as a drop; `--page grid` opens an inspector page; `--title
+/// "words" [--caption]` sets a title card, or a caption shown throughout.
 struct BeatSnapshotHost: ViewModifier {
     let session: BeatSession
     @State private var still: CGImage?
     @State private var started = false
+    @State private var deckDropped = false
 
     func body(content: Content) -> some View {
         content
@@ -326,6 +330,22 @@ struct BeatSnapshotHost: ViewModifier {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { MainActor.assumeIsolated { waitUntilReady(tries + 1) } }
             return
         }
+        if !deckDropped, let deck = StudioSnapshot.arg("--deck") {
+            deckDropped = true
+            session.importSlides(Self.writeDeck(deck, count: Int(StudioSnapshot.arg("--slides") ?? "") ?? 20))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { MainActor.assumeIsolated { waitUntilReady(0) } }
+            return
+        }
+        if let page = StudioSnapshot.arg("--page") { UserDefaults.standard.set(page, forKey: "inspectorPage") }
+        if let words = StudioSnapshot.arg("--title") {
+            let caption = CommandLine.arguments.contains("--caption")
+            session.setTitle("Title") { t in
+                t.text = words
+                t.kicker = StudioSnapshot.arg("--kicker") ?? ""
+                t.placement = caption ? .corner : .centre
+                t.timing = caption ? .throughout : .opening
+            }
+        }
         if let id = StudioSnapshot.arg("--look") { session.choose(Looks.look(id)) }
         if let fmt = StudioSnapshot.arg("--format"), let f = CanvasFormat.presets.first(where: { $0.id == fmt }) {
             session.update("Canvas") { $0.format = f }
@@ -336,6 +356,11 @@ struct BeatSnapshotHost: ViewModifier {
         session.clock.time = Double(StudioSnapshot.arg("--time") ?? "") ?? 3
         StudioSnapshot.sizeWindow()
         let f = session.project.format
+        if let layout = session.planned(for: f)?.layout {
+            let cell = layout.cells[0].size / layout.px
+            print(String(format: "layout: %d slides of %.2f:1 on %d×%d %@ cells, %.0f×%.0f px, %.0f%% of each cropped", session.project.slides.count,
+                         session.slideAspect, layout.columns, layout.rows, layout.shape.rawValue as NSString, cell.x, cell.y, layout.crop * 100))
+        }
         if let comp = session.composition() {
             still = try? Exporter().still(comp, at: session.clock.time, width: f.width, height: f.height, samples: 4)
         }
@@ -349,10 +374,27 @@ struct BeatSnapshotHost: ViewModifier {
             exit(0)
         }
         // A screen capture can start from here.
+        if let message = session.message { print("message: \(message)") }
         print("snapshot: ready")
         fflush(stdout)
         DispatchQueue.main.asyncAfter(deadline: .now() + (Double(StudioSnapshot.arg("--settle") ?? "") ?? 3)) {
             MainActor.assumeIsolated { StudioSnapshot.captureWindow() }
+        }
+    }
+}
+
+extension BeatSnapshotHost {
+    /// The sample deck drawn at 2576 × 1080 (`wide`) or 1920 × 1080 (`hd`), as PNG files to drop in.
+    static func writeDeck(_ kind: String, count: Int) -> [URL] {
+        let size = kind == "hd" ? (w: 1920, h: 1080) : (w: 2576, h: 1080)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("deck-beat-\(kind)-deck", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return (0..<max(1, count)).compactMap { i in
+            let url = dir.appendingPathComponent(String(format: "Slide %02d.png", i + 1))
+            let rep = NSBitmapImageRep(cgImage: DemoDeck.slide(index: i, width: size.w, height: size.h))
+            guard let data = rep.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil else { return nil }
+            return url
         }
     }
 }

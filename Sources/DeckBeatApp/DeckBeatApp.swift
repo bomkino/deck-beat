@@ -54,7 +54,9 @@ struct SongFile: Codable, Hashable {
 
 /// Everything saved in a Deck Beat project.
 struct BeatProject: Codable, Hashable {
-    var version = 1
+    static let currentVersion = 2
+
+    var version = BeatProject.currentVersion
     var slides: [MediaItem] = []
     var song: SongFile?
     var look = Looks.defaultID
@@ -68,12 +70,48 @@ struct BeatProject: Codable, Hashable {
     var landOnDrop = true
     /// The backdrop takes its colours from the slides.
     var followDeck = false
+    /// The grid refits as slides come and go, until it is set by hand.
+    var gridFollowsDeck = false
+    /// Corrections to the song's beat, when it was heard wrong.
+    var beat = BeatFix.none
+    /// Words over the video: a caption or a title card.
+    var title: ReelTitle?
+
+    init(backdrop: BackdropSettings, stage: StageLook) {
+        self.backdrop = backdrop
+        self.stage = stage
+    }
 
     static func fresh() -> BeatProject {
         let look = Looks.look(Looks.defaultID)
         var p = BeatProject(backdrop: look.backdrop(nil), stage: look.stage)
         p.settings = Looks.settings(look, over: BeatSettings())
+        p.gridFollowsDeck = true
         return p
+    }
+
+    /// Reads any version: whatever the file leaves out, or this version
+    /// cannot read, takes its default rather than failing the project.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let look = Looks.look((try? c.decodeIfPresent(String.self, forKey: .look)) ?? Looks.defaultID)
+        self.init(backdrop: look.backdrop(nil), stage: look.stage)
+        self.look = look.id
+        settings = Looks.settings(look, over: BeatSettings())
+        c.update(&version, .version)
+        c.update(&slides, .slides)
+        c.update(&song, .song)
+        c.update(&settings, .settings)
+        c.update(&backdrop, .backdrop)
+        c.update(&stage, .stage)
+        c.update(&format, .format)
+        c.update(&fps, .fps)
+        c.update(&clip, .clip)
+        c.update(&landOnDrop, .landOnDrop)
+        c.update(&followDeck, .followDeck)
+        c.update(&gridFollowsDeck, .gridFollowsDeck)
+        c.update(&beat, .beat)
+        c.update(&title, .title)
     }
 }
 
@@ -185,7 +223,8 @@ enum BeatPanels {
     static func addSlides(_ session: BeatSession) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = BeatSession.slideTypes
+        // Presentations can be chosen too, to be told how to bring them in.
+        panel.allowedContentTypes = BeatSession.slideTypes + SlideFiles.presentationExtensions.compactMap { UTType(filenameExtension: $0) }
         panel.message = "Choose slides: images, PDFs (each page becomes a slide) or clips."
         panel.begin { response in
             guard response == .OK else { return }

@@ -37,6 +37,6 @@ let package = Package(
         .target(name: "StudioKit", dependencies: ["RenderCore", "BackdropKit", "StageKit"], swiftSettings: settings),
         .target(name: "BeatKit", dependencies: ["RenderCore", "BackdropKit", "StageKit"], swiftSettings: settings),
         .executableTarget(name: "DeckBeatApp", dependencies: ["StudioKit", "BeatKit"], swiftSettings: settings),
-        .executableTarget(name: "DeckBeatLab", dependencies: ["RenderCore", "StageKit", "BeatKit"], swiftSettings: settings),
+        .executableTarget(name: "DeckBeatLab", dependencies: ["RenderCore", "StageKit", "StudioKit", "BeatKit"], swiftSettings: settings),
     ]
 )

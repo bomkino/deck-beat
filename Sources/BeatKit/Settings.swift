@@ -403,3 +403,119 @@ public struct Clip: Codable, Hashable, Sendable {
         return (s, seconds)
     }
 }
+
+// MARK: - Reading saved settings
+
+// Projects saved by an older or newer Deck Beat open as they were: a setting
+// the file leaves out, or one this version cannot read, keeps its default
+// rather than failing the whole project.
+
+extension KeyedDecodingContainer {
+    /// Overwrites `value` with the saved one when the key is there and readable.
+    public func update<T: Decodable>(_ value: inout T, _ key: Key) {
+        if let v = try? decodeIfPresent(T.self, forKey: key) { value = v }
+    }
+}
+
+extension CellState {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(scale: 1, brightness: 1, colour: 1, lift: 0, glow: 0)
+        c.update(&scale, .scale)
+        c.update(&brightness, .brightness)
+        c.update(&colour, .colour)
+        c.update(&lift, .lift)
+        c.update(&glow, .glow)
+        c.update(&opacity, .opacity)
+        c.update(&blur, .blur)
+        c.update(&tilt, .tilt)
+        c.update(&shadow, .shadow)
+        c.update(&open, .open)
+        c.update(&tint, .tint)
+        c.update(&tintColour, .tintColour)
+    }
+}
+
+extension Motion {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        c.update(&attack, .attack)
+        c.update(&hold, .hold)
+        c.update(&release, .release)
+        c.update(&bounce, .bounce)
+        c.update(&idle, .idle)
+        c.update(&idleAmount, .idleAmount)
+    }
+}
+
+extension Wall {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        c.update(&pitch, .pitch)
+        c.update(&yaw, .yaw)
+        c.update(&reflection, .reflection)
+    }
+}
+
+extension GridSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        c.update(&columns, .columns)
+        c.update(&rows, .rows)
+        c.update(&gap, .gap)
+        c.update(&corner, .corner)
+        c.update(&margins, .margins)
+        c.update(&shape, .shape)
+        c.update(&wall, .wall)
+        c.update(&order, .order)
+        c.update(&rotate, .rotate)
+    }
+}
+
+extension IntroSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        c.update(&coldOpen, .coldOpen)
+        c.update(&entrance, .entrance)
+        c.update(&order, .order)
+        c.update(&bars, .bars)
+    }
+}
+
+extension BeatSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        c.update(&mode, .mode)
+        c.update(&rest, .rest)
+        c.update(&lit, .lit)
+        c.update(&motion, .motion)
+        c.update(&grid, .grid)
+        c.update(&intro, .intro)
+        c.update(&outro, .outro)
+        c.update(&feature, .feature)
+        c.update(&spotlight, .spotlight)
+        c.update(&sensitivity, .sensitivity)
+        c.update(&listen, .listen)
+        c.update(&atmosphere, .atmosphere)
+        c.update(&drops, .drops)
+        c.update(&spread, .spread)
+        c.update(&step, .step)
+        c.update(&fromMiddle, .fromMiddle)
+        c.update(&seed, .seed)
+    }
+}
+
+extension Clip {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        c.update(&length, .length)
+        c.update(&start, .start)
+        c.update(&bestPart, .bestPart)
+    }
+}

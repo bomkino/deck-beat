@@ -39,9 +39,13 @@ final class BeatSession: StageSource {
     @ObservationIgnored private lazy var placeholder = MediaLoader.placeholder()
     @ObservationIgnored private var clipDurations: [UUID: Double] = [:]
     @ObservationIgnored private var paletteCache: (key: Int, palette: Palette?)?
+    /// The plan and composition for the stage, kept until anything visible changes.
+    @ObservationIgnored private var plannedMemo: [Float: (version: Int, planned: Planned)] = [:]
+    @ObservationIgnored private var compositionMemo: [Float: (version: Int, composition: Composition)] = [:]
+    @ObservationIgnored private var fixedAnalysis: (song: ObjectIdentifier, fix: BeatFix, analysis: SongAnalysis)?
 
     /// A plan and what goes with it, for one canvas.
-    struct Planned {
+    struct Planned: Sendable {
         var clip: ClipRange
         var layout: BeatKit.GridLayout
         var plan: BeatPlan
@@ -139,11 +143,19 @@ final class BeatSession: StageSource {
         planned(for: format)?.plan.length ?? 30
     }
 
-    /// The clip as it stands, once the song is ready.
-    var clip: ClipRange? {
+    /// The song as heard, with the project's corrections to its beat.
+    var analysis: SongAnalysis? {
         guard let song else { return nil }
-        return project.clip.resolve(song.analysis, settings: project.settings, landOnDrop: project.landOnDrop)
+        let fix = project.beat
+        if fix.isNone { return song.analysis }
+        if let f = fixedAnalysis, f.song == ObjectIdentifier(song), f.fix == fix { return f.analysis }
+        let a = song.analysis.fixed(fix)
+        fixedAnalysis = (ObjectIdentifier(song), fix, a)
+        return a
     }
+
+    /// The clip as it stands, once the song is ready.
+    var clip: ClipRange? { planned(for: project.format)?.clip }
 
     var exportCaption: String? {
         guard let c = clip else { return nil }
@@ -158,46 +170,90 @@ final class BeatSession: StageSource {
     var starred: Set<Int> { Set(project.slides.indices.filter { project.slides[$0].featured }) }
 
     func planned(for format: CanvasFormat) -> Planned? {
-        guard let song, !project.slides.isEmpty else { return nil }
         let aspect = Float(format.aspect)
+        // Asked for several times a frame (stage, sound, transport): worked out once per change.
+        if let m = plannedMemo[aspect], m.version == version { return m.planned }
+        guard let analysis, !project.slides.isEmpty else { return nil }
         let slideAspect = self.slideAspect
-        let clip = project.clip.resolve(song.analysis, settings: project.settings, landOnDrop: project.landOnDrop)
+        let clip = project.clip.resolve(analysis, settings: project.settings, landOnDrop: project.landOnDrop)
         var h = Hasher()
-        h.combine(ObjectIdentifier(song))
+        // The song's cache is cleared when the song changes; its corrections are part of the key.
+        h.combine(project.beat)
         h.combine(project.settings)
         h.combine(clip)
         h.combine(aspect)
         h.combine(slideAspect)
         h.combine(project.slides.count)
         h.combine(starred)
+        let clear = clearance(for: project, format: format)
+        h.combine(clear)
         let key = h.finalize()
-        if let hit = planCache[key] { return hit }
-        let (layout, plan) = Composer.plan(song.analysis, settings: project.settings, clip: clip, aspect: aspect, slideAspect: slideAspect,
-                                           slides: project.slides.count, starred: starred)
-        let made = Planned(clip: clip, layout: layout, plan: plan,
-                           modulate: Atmosphere.modulate(plan: plan, atmosphere: project.settings.atmosphere))
-        if planCache.count > 24 { planCache.removeAll() }
-        planCache[key] = made
+        let made: Planned
+        if let hit = planCache[key] {
+            made = hit
+        } else {
+            made = Self.plan(analysis, settings: project.settings, clip: clip, aspect: aspect, slideAspect: slideAspect,
+                             slides: project.slides.count, starred: starred, clear: clear)
+            if planCache.count > 24 { planCache.removeAll() }
+            planCache[key] = made
+        }
+        if plannedMemo.count > 8 { plannedMemo.removeAll() }
+        plannedMemo[aspect] = (version, made)
         return made
+    }
+
+    nonisolated static func plan(_ analysis: SongAnalysis, settings: BeatSettings, clip: ClipRange, aspect: Float, slideAspect: Float,
+                                 slides: Int, starred: Set<Int>, clear: Clearance) -> Planned {
+        let (layout, plan) = Composer.plan(analysis, settings: settings, clip: clip, aspect: aspect, slideAspect: slideAspect,
+                                           slides: slides, starred: starred, clear: clear)
+        return Planned(clip: clip, layout: layout, plan: plan, modulate: Atmosphere.modulate(plan: plan, atmosphere: settings.atmosphere))
+    }
+
+    /// What it takes to plan `p` on `format`, ready to be worked out off the main thread.
+    func planJob(for p: BeatProject, format: CanvasFormat) -> (@Sendable () -> Planned)? {
+        guard let analysis, !p.slides.isEmpty else { return nil }
+        let settings = p.settings, clip = p.clip, landOnDrop = p.landOnDrop, aspect = Float(format.aspect), slideAspect = slideAspect
+        let count = p.slides.count, starred = Set(p.slides.indices.filter { p.slides[$0].featured })
+        let clear = clearance(for: p, format: format)
+        return {
+            let range = clip.resolve(analysis, settings: settings, landOnDrop: landOnDrop)
+            return BeatSession.plan(analysis, settings: settings, clip: range, aspect: aspect, slideAspect: slideAspect, slides: count,
+                                    starred: starred, clear: clear)
+        }
+    }
+
+    /// The room a caption shown throughout takes at the top or foot of the frame, kept clear of the grid.
+    func clearance(for p: BeatProject, format: CanvasFormat) -> Clearance {
+        guard let title = p.title, title.timing == .throughout else { return .none }
+        let reach = TitleArt.reach(title, width: format.width, height: format.height)
+        return Clearance(top: Float(reach.top), bottom: Float(reach.bottom))
     }
 
     func composition() -> Composition? { composition(for: project.format) }
 
-    func composition(for format: CanvasFormat) -> Composition? { composition(of: project, format: format) }
+    func composition(for format: CanvasFormat) -> Composition? {
+        let aspect = Float(format.aspect)
+        if let m = compositionMemo[aspect], m.version == version { return m.composition }
+        guard let made = composition(of: project, format: format) else { return nil }
+        if compositionMemo.count > 8 { compositionMemo.removeAll() }
+        compositionMemo[aspect] = (version, made)
+        return made
+    }
 
-    /// A composition of `p`, which may be the project with another look tried on.
-    func composition(of p: BeatProject, format: CanvasFormat) -> Composition? {
-        guard let song, !p.slides.isEmpty else { return nil }
+    /// A composition of `p`, which may be the project with another look tried
+    /// on, using `planned` when it was worked out already.
+    func composition(of p: BeatProject, format: CanvasFormat, planned given: Planned? = nil) -> Composition? {
+        guard analysis != nil, !p.slides.isEmpty else { return nil }
         let planned: Planned
-        if p.settings == project.settings, p.slides == project.slides, p.clip == project.clip, p.landOnDrop == project.landOnDrop,
-           let mine = self.planned(for: format) {
+        if let given {
+            planned = given
+        } else if p.settings == project.settings, p.slides == project.slides, p.clip == project.clip, p.landOnDrop == project.landOnDrop,
+                  let mine = self.planned(for: format) {
             planned = mine
+        } else if let job = planJob(for: p, format: format) {
+            planned = job()
         } else {
-            let clip = p.clip.resolve(song.analysis, settings: p.settings, landOnDrop: p.landOnDrop)
-            let starred = Set(p.slides.indices.filter { p.slides[$0].featured })
-            let (layout, plan) = Composer.plan(song.analysis, settings: p.settings, clip: clip, aspect: Float(format.aspect),
-                                               slideAspect: slideAspect, slides: p.slides.count, starred: starred)
-            planned = Planned(clip: clip, layout: layout, plan: plan, modulate: Atmosphere.modulate(plan: plan, atmosphere: p.settings.atmosphere))
+            return nil
         }
         let textures = p.slides.map { self.textures[$0.id]?.texture ?? placeholder.texture }
         let aspects = p.slides.map { self.textures[$0.id]?.aspect ?? $0.aspect }
@@ -205,9 +261,42 @@ final class BeatSession: StageSource {
         for (i, item) in p.slides.enumerated() where item.kind == .video {
             if let d = clipDurations[item.id], d > 0 { videos[i] = VideoClip(url: document.media.url(for: item.file), duration: d) }
         }
-        return Composer.composition(plan: planned.plan, layout: planned.layout, settings: p.settings, stage: p.stage,
-                                    backdrop: p.backdrop, textures: textures, aspects: aspects, focals: p.slides.map(\.focal),
-                                    canvasAspect: Float(format.aspect), videos: videos, modulate: planned.modulate)
+        var comp = Composer.composition(plan: planned.plan, layout: planned.layout, settings: p.settings, stage: p.stage,
+                                        backdrop: p.backdrop, textures: textures, aspects: aspects, focals: p.slides.map(\.focal),
+                                        canvasAspect: Float(format.aspect), videos: videos, modulate: planned.modulate)
+        comp.overlay = titleOverlay(p)
+        return comp
+    }
+
+    // MARK: Title
+
+    /// Light words over a dark backdrop, dark over a light one, unless chosen.
+    func titleIsLight(_ p: BeatProject) -> Bool {
+        guard let title = p.title else { return true }
+        switch title.ink {
+        case .light: return true
+        case .dark: return false
+        case .auto: return title.placement == .centre || p.backdrop.palette.meanLightness * min(p.backdrop.brightness, 1.2) < 0.62
+        }
+    }
+
+    func titleOverlay(_ p: BeatProject) -> TitleOverlay? {
+        guard let title = p.title else { return nil }
+        return TitleArt.overlay(title, light: titleIsLight(p))
+    }
+
+    func setTitle(_ name: String, _ change: (inout ReelTitle) -> Void) {
+        update(name) { p in
+            var t = p.title ?? ReelTitle(placement: .centre, timing: .opening)
+            change(&t)
+            p.title = t
+        }
+    }
+
+    // MARK: Beat corrections
+
+    func setBeat(_ name: String, _ change: (inout BeatFix) -> Void) {
+        update(name) { p in change(&p.beat) }
     }
 
     /// Downbeats in the clip, for the transport.
@@ -307,31 +396,42 @@ final class BeatSession: StageSource {
         update("Choose Song") { p in
             p.song = SongFile(file: stored, title: title)
             p.clip.bestPart = true
+            p.beat = .none
         }
         clock.time = 0
     }
 
     func useDemoSong() {
-        update("Use the Demo Groove") { $0.song = nil }
+        update("Use the Demo Groove") { p in
+            p.song = nil
+            p.beat = .none
+        }
     }
 
     // MARK: Slides
 
     func importSlides(_ urls: [URL], at index: Int? = nil) {
         var added: [MediaItem] = []
+        var decks: [String] = []
         for url in urls {
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
+            if SlideFiles.isPresentation(url) { decks.append(url.lastPathComponent); continue }
             let entries = MediaLoader.inspect(url)
             guard !entries.isEmpty, let stored = try? document.media.importFile(url) else { continue }
             let base = url.deletingPathExtension().lastPathComponent
             for e in entries {
                 let name = entries.count > 1 ? "\(base) · \(e.page + 1)" : base
-                added.append(MediaItem(name: name, file: stored, kind: e.kind, page: e.page, aspect: 16.0 / 9.0, focal: BeatScene.defaultFocal))
+                // The true shape now, so the grid can fit the deck in the same step.
+                let aspect = SlideFiles.aspect(of: url, kind: e.kind, page: e.page) ?? 16.0 / 9.0
+                added.append(MediaItem(name: name, file: stored, kind: e.kind, page: e.page, aspect: aspect, focal: BeatScene.defaultFocal))
             }
         }
+        if !decks.isEmpty {
+            message = SlideFiles.presentationAdvice(decks)
+        }
         guard !added.isEmpty else {
-            message = "Those files could not be added. Try images, PDFs or movies."
+            if decks.isEmpty { message = "Those files could not be added. Try images, PDFs or movies." }
             return
         }
         // Real slides replace the untouched samples in the same step.
@@ -340,9 +440,17 @@ final class BeatSession: StageSource {
             if replaces { p.slides.removeAll() }
             let at = min(index ?? p.slides.count, p.slides.count)
             p.slides.insert(contentsOf: added, at: at)
+            Self.refit(&p)
         }
         if replaces || selection == nil { selection = added.first?.id }
         loadMedia()
+    }
+
+    /// Fits the grid to the deck while it follows the deck.
+    static func refit(_ p: inout BeatProject) {
+        guard p.gridFollowsDeck, !p.slides.isEmpty else { return }
+        p.settings.grid = p.settings.grid.fitted(count: p.slides.count, aspect: Float(p.format.aspect),
+                                                  slideAspect: Composer.typicalAspect(p.slides.map(\.aspect)))
     }
 
     /// Sorts dropped files: sound becomes the song, everything else a slide.
@@ -357,7 +465,10 @@ final class BeatSession: StageSource {
 
     func remove(_ ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
-        update(ids.count == 1 ? "Remove Slide" : "Remove Slides") { p in p.slides.removeAll { ids.contains($0.id) } }
+        update(ids.count == 1 ? "Remove Slide" : "Remove Slides") { p in
+            p.slides.removeAll { ids.contains($0.id) }
+            Self.refit(&p)
+        }
         if let s = selection, ids.contains(s) { selection = project.slides.first?.id }
     }
 
@@ -481,16 +592,37 @@ final class BeatSession: StageSource {
             p.settings.grid.columns = min(max(columns, 1), 12)
             p.settings.grid.rows = min(max(rows, 1), 20)
             if let shape { p.settings.grid.shape = shape }
+            // Set by hand: it stays put as slides come and go.
+            p.gridFollowsDeck = false
         }
     }
 
+    func setShape(_ shape: CellShape) {
+        update("Cell Shape") { p in
+            p.settings.grid.shape = shape
+            p.gridFollowsDeck = false
+        }
+    }
+
+    /// Fits the grid to the deck, and keeps it fitted as slides come and go.
     func fitDeck() {
-        let f = BeatKit.GridLayout.fit(count: project.slides.count, aspect: Float(project.format.aspect), slideAspect: slideAspect,
-                                       base: project.settings.grid)
         update("Fit the Grid") { p in
-            p.settings.grid.columns = f.columns
-            p.settings.grid.rows = f.rows
-            p.settings.grid.shape = .auto
+            p.gridFollowsDeck = true
+            Self.refit(&p)
+        }
+    }
+
+    /// A grid size of about `count` cells for this deck's slide shape, with the shape that suits it.
+    func gridPreset(about count: Int) -> GridSettings {
+        project.settings.grid.fitted(count: count, aspect: Float(project.format.aspect), slideAspect: slideAspect)
+    }
+
+    func usePreset(_ g: GridSettings) {
+        update("Grid") { p in
+            p.settings.grid.columns = g.columns
+            p.settings.grid.rows = g.rows
+            p.settings.grid.shape = g.shape
+            p.gridFollowsDeck = false
         }
     }
 

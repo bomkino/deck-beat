@@ -36,12 +36,23 @@ extension ReelTitle.Face {
 
 /// Sets a reel title into a transparent frame: the line above in small
 /// tracked capitals, the title beneath it, each sized to the frame.
-enum TitleArt {
+public enum TitleArt {
+    /// `title` ready to draw over a composition, in light or dark ink; nil when it has no words.
+    public static func overlay(_ title: ReelTitle, light: Bool) -> TitleOverlay? {
+        guard !title.isEmpty else { return nil }
+        var h = Hasher()
+        h.combine(title)
+        h.combine(light)
+        return TitleOverlay(key: h.finalize(), timing: title.timing, scrim: title.placement == .centre ? 0.5 : 0) { w, hgt in
+            image(title, light: light, width: w, height: hgt)
+        }
+    }
+
     static let paper = CGColor(srgbRed: 0.97, green: 0.965, blue: 0.955, alpha: 1)
     static let ink = CGColor(srgbRed: 0.075, green: 0.078, blue: 0.086, alpha: 1)
 
     /// The most words a title takes before it reads as a paragraph.
-    static func maxWords(_ placement: ReelTitle.Placement) -> Int { placement == .centre ? 10 : 14 }
+    public static func maxWords(_ placement: ReelTitle.Placement) -> Int { placement == .centre ? 10 : 14 }
 
     /// Lines of one block, broken to a width.
     struct Block {
@@ -103,22 +114,27 @@ enum TitleArt {
 
     static func kickerSize(_ w: CGFloat, _ h: CGFloat) -> CGFloat { min(0.027 * w, 0.022 * h) }
 
-    /// The title over a transparent frame of this pixel size.
-    static func image(_ title: ReelTitle, light: Bool, width: Int, height: Int) -> CGImage? {
-        guard width > 8, height > 8,
-              let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-        let W = CGFloat(width), H = CGFloat(height)
+    /// The words set and placed for a frame: each block with its point size,
+    /// the gap between them, and the top of the stack measured down from the
+    /// top of the frame.
+    struct Setting {
+        var stack: [(Block, CGFloat)]
+        var gap: CGFloat
+        var top: CGFloat
+        var total: CGFloat
+        var card: Bool
+        var margin: CGFloat
+    }
+
+    static func setting(_ title: ReelTitle, color: CGColor, width W: CGFloat, height H: CGFloat) -> Setting? {
         let card = title.placement == .centre
         let inset = insets(W, H)
         let margin = 0.055 * min(W, H)
-        let color = light ? paper : ink
         let face = title.face
         let titlePt = titleSize(card: card, W, H) * face.scale
         let kickerPt = kickerSize(W, H)
         let names = face.fontNames
-        let setting = face.titleSetting
+        let titleSetting = face.titleSetting
 
         // Measure: a caption stays in its corner's column; a title card stays
         // clear of a reel's side controls on both sides, so it stays centred.
@@ -126,15 +142,15 @@ enum TitleArt {
         let maxWidth = card ? W - 2 * side : min(W * 0.62, W - 2 * margin - inset.right)
         let kicker = block(title.kicker.uppercased(), font: Faces.font(names.kicker, size: kickerPt), tracking: 0.16, lineHeight: 1.25,
                            maxLines: 2, color: color.copy(alpha: 0.82) ?? color, maxWidth: maxWidth)
-        let main = block(title.text, font: Faces.font(names.title, size: titlePt), tracking: setting.tracking,
-                         lineHeight: setting.lineHeight, maxLines: 4, color: color, maxWidth: maxWidth)
+        let main = block(title.text, font: Faces.font(names.title, size: titlePt), tracking: titleSetting.tracking,
+                         lineHeight: titleSetting.lineHeight, maxLines: 4, color: color, maxWidth: maxWidth)
         let gap = kickerPt * 1.0 + titlePt * 0.16
         let stack: [(Block, CGFloat)] = [kicker.map { ($0, kickerPt) }, main.map { ($0, titlePt) }].compactMap { $0 }
         guard !stack.isEmpty else { return nil }
         let total = stack.map(\.0.height).reduce(0, +) + (stack.count > 1 ? gap : 0)
 
         // Place: y measured down from the top of the frame.
-        var top: CGFloat
+        let top: CGFloat
         if card {
             let upper = inset.top, lower = H - inset.bottom
             top = upper + (lower - upper - total) / 2
@@ -144,6 +160,32 @@ enum TitleArt {
         } else {
             top = H - inset.bottom - margin - total
         }
+        return Setting(stack: stack, gap: gap, top: top, total: total, card: card, margin: margin)
+    }
+
+    /// How far a caption reaches into the frame from the edge it sits on, as
+    /// shares of the frame's height, with a little air: what a grid of
+    /// pictures should keep clear of. Zero for a title card, which dims the
+    /// stage behind it instead.
+    public static func reach(_ title: ReelTitle, width: Int, height: Int) -> (top: Double, bottom: Double) {
+        guard title.placement == .corner, !title.isEmpty, width > 8, height > 8,
+              let s = setting(title, color: ink, width: CGFloat(width), height: CGFloat(height)) else { return (0, 0) }
+        let H = CGFloat(height)
+        let air = s.margin * 0.6
+        if s.top < H / 2 { return (Double((s.top + s.total + air) / H), 0) }
+        return (0, Double((H - s.top + air) / H))
+    }
+
+    /// The title over a transparent frame of this pixel size.
+    static func image(_ title: ReelTitle, light: Bool, width: Int, height: Int) -> CGImage? {
+        guard width > 8, height > 8,
+              let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        let W = CGFloat(width), H = CGFloat(height)
+        guard let set = setting(title, color: light ? paper : ink, width: W, height: H) else { return nil }
+        let card = set.card, margin = set.margin, gap = set.gap, stack = set.stack
+        var top = set.top
 
         ctx.textMatrix = .identity
         for (b, size) in stack {

@@ -90,6 +90,9 @@ public struct ExportSettings: Sendable {
 public final class Exporter: @unchecked Sendable {
     public let renderer: StageRenderer
     let titles: TitleCompositor
+    /// Encodes the next video frame while the GPU draws the last; off exports
+    /// one frame at a time (for A/B timing). Clips with video slides always do.
+    public var overlapFrames = true
 
     public init(renderer: StageRenderer? = nil) throws {
         self.renderer = try renderer ?? StageRenderer()
@@ -200,17 +203,35 @@ public final class Exporter: @unchecked Sendable {
             let keepAlpha = s.transparent && codec.supportsAlpha
             let writer = try VideoWriter(url: url, width: s.width, height: s.height, fps: s.fps, codec: codec, audio: s.audio)
             let target = PixelBufferTarget(width: s.width, height: s.height)
+            // While the GPU draws one frame the next is worked out and encoded.
+            // Video slides decode into shared frames, so with them each frame finishes first.
+            let overlap = comp.videos.isEmpty && overlapFrames
+            var drawing: (index: Int, cb: MTLCommandBuffer, buffer: CVPixelBuffer, cvTex: CVMetalTexture)?
+            func finish(_ f: (index: Int, cb: MTLCommandBuffer, buffer: CVPixelBuffer, cvTex: CVMetalTexture)) throws {
+                f.cb.waitUntilCompleted()
+                if let e = f.cb.error { throw RenderError.io("GPU error: \(e.localizedDescription)") }
+                _ = f.cvTex
+                try writer.append(f.buffer)
+                if let preview, f.index % 12 == 0, let img = ImageOutput.cgImage(pixelBuffer: f.buffer, keepAlpha: keepAlpha) { preview(img) }
+                progress(Progress(frame: f.index + 1, total: total))
+            }
             do {
                 for i in 0..<total {
                     if isCancelled() { throw RenderError.cancelled }
                     let t = Double(i) / Double(s.fps)
                     let (buffer, texture, cvTex) = try target.next()
-                    try renderSync(comp, at: t, output: texture, samples: s.samples, fps: s.fps, frameIndex: UInt32(i), transparent: keepAlpha, pool: pool)
-                    _ = cvTex
-                    try writer.append(buffer)
-                    if let preview, i % 12 == 0, let img = ImageOutput.cgImage(pixelBuffer: buffer, keepAlpha: keepAlpha) { preview(img) }
-                    progress(Progress(frame: i + 1, total: total))
+                    guard let cb = gpu.queue.makeCommandBuffer() else { throw RenderError.io("GPU unavailable.") }
+                    try encode(cb, comp, at: t, output: texture, samples: s.samples, fps: s.fps, frameIndex: UInt32(i), transparent: keepAlpha,
+                               pool: pool)
+                    cb.commit()
+                    if let previous = drawing { try finish(previous) }
+                    drawing = (i, cb, buffer, cvTex)
+                    if !overlap, let current = drawing {
+                        try finish(current)
+                        drawing = nil
+                    }
                 }
+                if let last = drawing { try finish(last) }
                 try await writer.finish()
             } catch {
                 writer.cancel()

@@ -155,6 +155,152 @@ enum Checks {
         for c in 0..<p2.cells { for w in p2.swaps[c] where w.time < 15 { seen.insert(w.slide) } }
         check("deck rotation", seen.count == 40, "\(seen.count) of 40 slides seen by 15 s on 4×8")
 
+        // v2 ---------------------------------------------------------------
+
+        // A slide stepping out of the grid stays inside the frame, as the camera
+        // sees it: lifted towards the lens, on the kick, through the camera's
+        // punch, whatever the slide's shape, the canvas, the wall or the spotlight.
+        var worst: Float = -1, worstAt = "", heroFrames = 0
+        let wide: Float = 2576.0 / 1080.0
+        let canvases: [Float] = [tall, 1, 16.0 / 9.0], shapes: [Float] = [wide, 16.0 / 9.0, 4.0 / 3.0, 1, 0.75]
+        for canvas in canvases {
+            for slideAspect in shapes {
+                for variant in 0..<4 {
+                    var h = BeatSettings()
+                    h.feature = .twoBars
+                    h.spotlight = variant % 2 == 1
+                    h.atmosphere = variant >= 2 ? 1 : 0.5
+                    if variant == 3 { h.grid.wall = .angle }
+                    let layout = GridLayout(settings: h.grid, aspect: canvas, slideAspect: slideAspect)
+                    let p = Choreographer.plan(a, settings: h, layout: layout, slides: 15, clipStart: 0, clipLength: 30)
+                    let scene = BeatScene(plan: p, layout: layout, settings: h)
+                    let ctx = SceneContext(items: (0..<15).map { SceneItem(media: $0, occurrence: $0, aspect: slideAspect) }, aspect: canvas,
+                                           dials: SceneDials())
+                    var times: [Double] = stride(from: 0, to: p.intro.end, by: 1.0 / 30).map { $0 }
+                    for f in p.features { times += stride(from: f.liftOff, through: f.end, by: 1.0 / 30).map { $0 } }
+                    for t in times {
+                        let frame = scene.frame(at: t, ctx)
+                        let eye = GridLayout.eyeDistance + frame.camera.offset.z
+                        for c in frame.cards where c.layer >= 3 && abs(c.rotation.x) + abs(c.rotation.y) + abs(c.rotation.z) < 0.02 {
+                            let k = GridLayout.eyeDistance / (eye - c.position.z)
+                            let overX = abs(c.position.x * k) + c.size.x * k / 2 - canvas / 2
+                            let overY = abs(c.position.y * k) + c.size.y * k / 2 - 0.5
+                            let over = max(overX, overY)
+                            heroFrames += 1
+                            if over > worst {
+                                worst = over
+                                worstAt = String(format: "canvas %.2f, slide %.2f, variant %d, t %.2f", canvas, slideAspect, variant, t)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // At least 1 % of the frame's height clear of every edge.
+        check("hero fits", worst <= -0.01, String(format: "%d frames out front; at most %.3f from the edge (%@)", heroFrames, worst, worstAt as NSString))
+
+        // A featured slide comes back to the card it left, and no other card
+        // shows it meanwhile, even while cells turn over to show a big deck
+        // (starred slides off the first grid step forward early and often).
+        var homeless = 0, twins = 0, homed = 0
+        for mode in BeatMode.allCases {
+            var m = BeatSettings()
+            m.mode = mode
+            m.feature = .oneBar
+            let p = Choreographer.plan(a, settings: m, layout: grid, slides: 40, clipStart: 0, clipLength: 34, starred: [18, 23, 31, 37])
+            for f in p.features {
+                for t in stride(from: f.liftOff, through: f.end, by: 0.05) {
+                    if let c = f.cell {
+                        let (slide, turn) = p.slide(cell: c, at: t)
+                        if slide != f.slide || turn != 0 { homeless += 1 }
+                    }
+                    for c in 0..<p.cells where c != f.cell && p.slide(cell: c, at: t).slide == f.slide { twins += 1 }
+                }
+                if f.cell != nil { homed += 1 }
+            }
+        }
+        check("comes home", homeless == 0 && twins == 0,
+              "\(homed) features from the grid; \(homeless) moments away from home, \(twins) moments shown twice")
+
+        // Projects from another version open: missing settings take their
+        // defaults, unreadable ones are skipped, and nothing else is lost.
+        let decoder = JSONDecoder()
+        let empty = try? decoder.decode(BeatSettings.self, from: Data("{}".utf8))
+        let partial = try? decoder.decode(BeatSettings.self, from: Data(#"{"mode":"strobe","sensitivity":0.9,"grid":{"columns":4,"shape":"hex"},"future":1}"#.utf8))
+        var changed = BeatSettings()
+        changed.mode = .ripple
+        changed.lit.tint = 0.3
+        changed.grid.wall = .angle
+        changed.intro.entrance = .unfold
+        let again = (try? JSONEncoder().encode(changed)).flatMap { try? decoder.decode(BeatSettings.self, from: $0) }
+        let fix = try? decoder.decode(BeatFix.self, from: Data("{}".utf8))
+        check("old projects", empty == BeatSettings() && partial?.mode == .pulse && partial?.sensitivity == 0.9 && partial?.grid.columns == 4
+              && partial?.grid.rows == 5 && partial?.grid.shape == .auto && again == changed && fix == BeatFix.none,
+              "empty, partial and future settings read; a round trip keeps every value")
+
+        // Decks made for wide screens: 2576 × 1080 and 1920 × 1080 slides in a
+        // 1080 × 1920 frame. The fitted grid holds the deck with less than a row
+        // spare, inside the safe area, cropping at most a third of a slide.
+        var fits: [String] = [], badFits = 0
+        for (name, shape) in [("2576", wide), ("1920", Float(16.0 / 9.0))] {
+            for n in [6, 10, 12, 15, 18, 20, 24, 27, 30, 36, 40, 60] {
+                let g = GridSettings().fitted(count: n, aspect: tall, slideAspect: shape)
+                let l = GridLayout(settings: g, aspect: tall, slideAspect: shape)
+                let inside = l.cells.allSatisfy { c in
+                    abs(c.centre.x) + c.size.x / 2 <= l.safeSize.x / 2 + 1e-4 && abs(c.centre.y) + c.size.y / 2 <= l.safeSize.y / 2 + 1e-4
+                }
+                if l.count < n || l.count - n >= l.columns || l.crop > 0.35 || !inside { badFits += 1 }
+                if [15, 30].contains(n) {
+                    fits.append("\(name)×1080 \(n): \(l.columns)×\(l.rows) \(l.shape.rawValue) \(Int(l.cells[0].size.x / l.px))×\(Int(l.cells[0].size.y / l.px)) px")
+                }
+            }
+        }
+        let auto15 = GridLayout(settings: GridSettings(), aspect: tall, slideAspect: wide)
+        check("wide decks", badFits == 0 && auto15.crop == 0, fits.joined(separator: "; ") + "; default 3×5 keeps 2576 slides whole")
+
+        // A lit slide opening to its own shape in a filled cell grows at most
+        // half as wide again, so a very wide slide never sprawls over its row.
+        var r = BeatSettings()
+        r.mode = .readThrough
+        r.lit = CellState(scale: 1.1, brightness: 1, colour: 1, lift: 0.06, glow: 0.15, tilt: 2, shadow: 1.3, open: 1)
+        r.motion.bounce = 0.12
+        r.grid.shape = .fill
+        let rl = GridLayout(settings: r.grid, aspect: tall, slideAspect: wide)
+        let rp = Choreographer.plan(a, settings: r, layout: rl, slides: 15, clipStart: 0, clipLength: 30)
+        let rs = BeatScene(plan: rp, layout: rl, settings: r)
+        let rctx = SceneContext(items: (0..<15).map { SceneItem(media: $0, occurrence: $0, aspect: wide) }, aspect: tall, dials: SceneDials())
+        var widest: Float = 0
+        for t in stride(from: rp.intro.end, to: rp.outro.start, by: 1.0 / 30) {
+            for c in rs.frame(at: t, rctx).cards where c.layer < 3 { widest = max(widest, c.size.x / rl.cells[0].size.x) }
+        }
+        let allowed = 1.5 * r.lit.scale * (1 + r.motion.bounce)
+        check("open wide", widest <= allowed + 0.01, String(format: "widest lit card %.2f× its cell (allowed %.2f×)", widest, allowed))
+
+        // Fixing the beat: twice or half the tempo, bars starting a beat later,
+        // the grid nudged; the plan still keeps its timing.
+        let barOne = a.beats.first { $0.isDownbeat && $0.bar == 0 }?.time ?? 0
+        let double = a.fixed(BeatFix(speed: .double)), half = a.fixed(BeatFix(speed: .half))
+        let shifted = a.fixed(BeatFix(barShift: 1)), nudged = a.fixed(BeatFix(nudge: 0.05))
+        let downAt = { (x: SongAnalysis) in x.beats.first { $0.isDownbeat && $0.bar == 0 }?.time ?? -1 }
+        let beatOK = abs(double.tempo - 2 * a.tempo) < 0.01 && double.beats.count == 2 * a.beats.count - 1 && abs(downAt(double) - barOne) < 1e-6
+            && abs(half.tempo - a.tempo / 2) < 0.01 && abs(downAt(half) - barOne) < 1e-6
+            && abs(downAt(shifted) - (barOne + a.beatPeriod)) < a.beatPeriod * 0.2
+            && zip(nudged.beats, a.beats).allSatisfy { abs($0.time - $1.time - 0.05) < 1e-9 }
+        var planOK = true
+        for x in [double, half, shifted, nudged] {
+            let p = Choreographer.plan(x, settings: BeatSettings(), layout: grid, slides: 15, clipStart: 0, clipLength: 30)
+            planOK = planOK && p.intro.end < p.outro.start && p.intro.landings.allSatisfy { $0 >= -1e-6 && $0 <= p.intro.end + 1e-6 }
+        }
+        check("beat fix", beatOK && planOK, String(format: "%.0f → %.0f and %.0f BPM; bar one %.2f → %.2f s; plans keep their timing",
+                                                   a.tempo, double.tempo, half.tempo, barOne, downAt(shifted)))
+
+        // A caption across the top: the grid keeps clear of it.
+        let clear = Clearance(top: 0.25)
+        let cl = GridLayout(settings: GridSettings(), aspect: tall, slideAspect: 16.0 / 9.0, clear: clear)
+        let highest = cl.cells.map { cl.safeCentre.y + $0.centre.y + $0.size.y / 2 }.max() ?? 1
+        check("caption room", highest <= 0.5 - 0.25 + 1e-4, String(format: "top of the grid %.0f px below the top of the frame",
+                                                                   (0.5 - highest) * 1920))
+
         return failures
     }
 

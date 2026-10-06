@@ -20,11 +20,19 @@ public enum DemoDeck {
     static let mist = rgb(0x8B95A7)
 
     /// Slide `index` (0…14) as an image.
-    public static func slide(index: Int) -> CGImage {
-        let w = width, h = height
+    public static func slide(index: Int) -> CGImage { slide(index: index, width: width, height: height) }
+
+    /// Slide `index` at any size, such as 2576 × 1080 for a deck made for wide
+    /// screens: laid out as at 1600 × 900, scaled to fit, its background carried
+    /// out to the edges.
+    public static func slide(index: Int, width w: Int, height h: Int) -> CGImage {
         let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        let d = Draw(ctx: ctx, w: CGFloat(w), h: CGFloat(h))
+        let k = min(CGFloat(w) / CGFloat(width), CGFloat(h) / CGFloat(height))
+        let spare = CGSize(width: (CGFloat(w) / k - CGFloat(width)) / 2, height: (CGFloat(h) / k - CGFloat(height)) / 2)
+        ctx.scaleBy(x: k, y: k)
+        ctx.translateBy(x: spare.width, y: spare.height)
+        let d = Draw(ctx: ctx, w: CGFloat(width), h: CGFloat(height), bleed: spare)
         switch index % count {
         case 0: cover(d)
         case 1: problem(d)
@@ -256,11 +264,15 @@ public enum DemoDeck {
         let ctx: CGContext
         let w: CGFloat
         let h: CGFloat
+        /// How far the canvas runs past the layout on each side, for slides of another shape.
+        var bleed = CGSize.zero
 
         func flip(_ r: CGRect) -> CGRect { CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height) }
         func flip(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x, y: h - p.y) }
 
-        func fill(_ c: Colour) { rect(CGRect(x: 0, y: 0, width: w, height: h), colour: c) }
+        func fill(_ c: Colour) {
+            rect(CGRect(x: -bleed.width, y: -bleed.height, width: w + 2 * bleed.width, height: h + 2 * bleed.height), colour: c)
+        }
 
         func rect(_ r: CGRect, colour: Colour) {
             ctx.setFillColor(colour.cg)
@@ -289,7 +301,7 @@ public enum DemoDeck {
         func verticalGradient(top: Colour, bottom: Colour) {
             let colours = [bottom.cg, top.cg] as CFArray
             guard let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colours, locations: [0, 1]) else { return }
-            ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: 0), end: CGPoint(x: 0, y: h), options: [])
+            ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: 0), end: CGPoint(x: 0, y: h), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
         }
 
         func stroke(_ path: CGPath, colour: Colour, width: CGFloat) {

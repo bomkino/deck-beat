@@ -6,14 +6,17 @@ import ImageIO
 import Metal
 import RenderCore
 import StageKit
+import StudioKit
 import UniformTypeIdentifiers
 
 // beat-lab: headless checks and renders, for CI and visual review.
 //
 //   beat-lab check                 song analysis, layout, plans and scenes, on the CPU
-//   beat-lab render --out <dir>    contact sheet of every Look and a demo clip with sound
+//   beat-lab bench                 how long listening and planning take, on the CPU
+//   beat-lab render --out <dir>    contact sheets of every Look and of wide decks, a demo
+//                                  clip with sound, and export timings old and new
 
-let usage = "usage: beat-lab check | beat-lab render --out <dir>"
+let usage = "usage: beat-lab check | beat-lab bench | beat-lab render --out <dir>"
 let args = Array(CommandLine.arguments.dropFirst())
 
 switch args.first {
@@ -21,6 +24,9 @@ case "check":
     let failed = Checks.run()
     print(failed == 0 ? "All checks passed." : "\(failed) checks failed.")
     exit(failed == 0 ? 0 : 1)
+
+case "bench":
+    Bench.run()
 
 case "render":
     guard let i = args.firstIndex(of: "--out"), i + 1 < args.count else {
@@ -83,6 +89,7 @@ enum Render {
         let sheetURL = dir.appendingPathComponent("contact-sheet.png")
         try ImageOutput.writePNG(sheetImage, to: sheetURL)
         print(String(format: "wrote %@ in %.1f s", sheetURL.lastPathComponent as NSString, Date().timeIntervalSince(t0)))
+        let wideSheets = try WideDecks.render(song: song, exporter: exporter, to: dir)
 
         // A 15-second clip of the default Look in the Reel frame, with its sound.
         let t1 = Date()
@@ -100,35 +107,50 @@ enum Render {
         print(String(format: "wrote %@ (%.1f s from %.2f s, %@) in %.1f s", clipURL.lastPathComponent as NSString, made.clip.length,
                      made.clip.start, made.clip.outro.title as NSString, Date().timeIntervalSince(t1)))
 
-        // A small copy of the sheet in the log, for reviewers who can't download the artifact.
-        if let thumb = scaled(sheetImage, width: 945), let data = jpeg(thumb, quality: 0.72) {
-            let b64 = data.base64EncodedString()
-            print("thumbnail: contact-sheet.jpg, \(data.count) bytes, base64 in \((b64.count + 999) / 1000) lines")
-            var i = b64.startIndex
-            while i < b64.endIndex {
-                let j = b64.index(i, offsetBy: 1000, limitedBy: b64.endIndex) ?? b64.endIndex
-                print("b64 " + b64[i..<j])
-                i = j
-            }
+        try await ExportBench.run(song: song, media: media, exporter: exporter)
+
+        // Small copies of the sheets in the log, for reviewers who can't download the artifact.
+        printThumbnail(sheetImage, name: "contact-sheet", width: 945, prefix: "b64")
+        for (name, image) in wideSheets { printThumbnail(image, name: name, width: image.width, prefix: "b64-\(name)") }
+    }
+
+    static func printThumbnail(_ image: CGImage, name: String, width: Int, prefix: String) {
+        guard let thumb = scaled(image, width: width), let data = jpeg(thumb, quality: 0.72) else { return }
+        let b64 = data.base64EncodedString()
+        print("thumbnail: \(name).jpg, \(data.count) bytes, base64 in \((b64.count + 999) / 1000) lines")
+        var i = b64.startIndex
+        while i < b64.endIndex {
+            let j = b64.index(i, offsetBy: 1000, limitedBy: b64.endIndex) ?? b64.endIndex
+            print(prefix + " " + b64[i..<j])
+            i = j
         }
     }
 
     struct Made {
         var clip: ClipRange
         var plan: BeatPlan
+        var layout: GridLayout
         var composition: Composition
     }
 
     /// The composition the app would make for `look` with the demo deck and groove.
-    static func compose(_ look: Look, song: Song, media: [MediaTexture], clip: Clip, aspect: Float) -> Made {
-        let settings = Looks.settings(look, over: BeatSettings())
+    static func compose(_ look: Look, song: Song, media: [MediaTexture], clip: Clip, aspect: Float,
+                        grid: ((GridSettings) -> GridSettings)? = nil, title: ReelTitle? = nil, canvas: (w: Int, h: Int) = (1080, 1920)) -> Made {
+        var settings = Looks.settings(look, over: BeatSettings())
+        if let grid { settings.grid = grid(settings.grid) }
         let aspects = media.map(\.aspect)
         let range = clip.resolve(song.analysis, settings: settings)
+        var clear = Clearance.none
+        if let title, title.timing == .throughout {
+            let reach = TitleArt.reach(title, width: canvas.w, height: canvas.h)
+            clear = Clearance(top: Float(reach.top), bottom: Float(reach.bottom))
+        }
         let (layout, plan) = Composer.plan(song.analysis, settings: settings, clip: range, aspect: aspect,
-                                           slideAspect: Composer.typicalAspect(aspects), slides: media.count)
-        let comp = Composer.composition(plan: plan, layout: layout, settings: settings, stage: look.stage, backdrop: look.backdrop(nil),
+                                           slideAspect: Composer.typicalAspect(aspects), slides: media.count, clear: clear)
+        var comp = Composer.composition(plan: plan, layout: layout, settings: settings, stage: look.stage, backdrop: look.backdrop(nil),
                                         textures: media.map(\.texture), aspects: aspects, canvasAspect: aspect)
-        return Made(clip: range, plan: plan, composition: comp)
+        if let title { comp.overlay = TitleArt.overlay(title, light: true) }
+        return Made(clip: range, plan: plan, layout: layout, composition: comp)
     }
 
     static func text(_ s: String, in ctx: CGContext, at p: CGPoint, bold: Bool) {
