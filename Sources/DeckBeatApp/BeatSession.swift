@@ -39,6 +39,8 @@ final class BeatSession: StageSource {
     @ObservationIgnored private lazy var placeholder = MediaLoader.placeholder()
     @ObservationIgnored private var clipDurations: [UUID: Double] = [:]
     @ObservationIgnored private var paletteCache: (key: Int, palette: Palette?)?
+    /// Each slide's own colours, for a room that takes the colour of the slide in view.
+    @ObservationIgnored private var slidePalettes: [UUID: Palette] = [:]
     /// The plan and composition for the stage, kept until anything visible changes.
     @ObservationIgnored private var plannedMemo: [Float: (version: Int, planned: Planned)] = [:]
     @ObservationIgnored private var compositionMemo: [Float: (version: Int, composition: Composition)] = [:]
@@ -264,7 +266,8 @@ final class BeatSession: StageSource {
         var comp = Composer.composition(plan: planned.plan, layout: planned.layout, settings: p.settings, stage: p.stage,
                                         backdrop: p.backdrop, textures: textures, aspects: aspects, focals: p.slides.map(\.focal),
                                         canvasAspect: Float(format.aspect), videos: videos, modulate: planned.modulate)
-        comp.overlay = titleOverlay(p)
+        comp.overlay = titleOverlay(p, plan: planned.plan)
+        comp.itemPalettes = p.slides.map { slidePalettes[$0.id] }
         return comp
     }
 
@@ -280,9 +283,10 @@ final class BeatSession: StageSource {
         }
     }
 
-    func titleOverlay(_ p: BeatProject) -> TitleOverlay? {
+    /// The title over a composition of `p`, its words landing on the beats of `plan` when asked.
+    func titleOverlay(_ p: BeatProject, plan: BeatPlan) -> TitleOverlay? {
         guard let title = p.title else { return nil }
-        return TitleArt.overlay(title, light: titleIsLight(p))
+        return TitleArt.overlay(title, light: titleIsLight(p), cues: WordTiming.cues(title, plan: plan))
     }
 
     func setTitle(_ name: String, _ change: (inout ReelTitle) -> Void) {
@@ -541,6 +545,7 @@ final class BeatSession: StageSource {
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let tex = try? MediaLoader.load(url: url, kind: kind, page: page, maxSide: side)
                 let thumb = MediaLoader.cgImage(url: url, kind: kind, page: page, maxSide: 360)
+                let palette = thumb.flatMap { Palette.extract(from: [$0], name: "") }
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.importing = max(0, self.importing - 1)
@@ -556,6 +561,7 @@ final class BeatSession: StageSource {
                         }
                     }
                     if let thumb { self.thumbnails[id] = thumb }
+                    if let palette { self.slidePalettes[id] = palette }
                     self.version += 1
                     self.clock.duration = self.loopDuration
                 }

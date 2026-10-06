@@ -37,15 +37,22 @@ extension ReelTitle.Face {
 /// Sets a reel title into a transparent frame: the line above in small
 /// tracked capitals, the title beneath it, each sized to the frame.
 public enum TitleArt {
-    /// `title` ready to draw over a composition, in light or dark ink; nil when it has no words.
-    public static func overlay(_ title: ReelTitle, light: Bool) -> TitleOverlay? {
+    /// `title` ready to draw over a composition, in light or dark ink; nil when
+    /// it has no words. `cues` land its words on the beat, one per group, when
+    /// the title asks for that.
+    public static func overlay(_ title: ReelTitle, light: Bool, cues: [WordCue] = []) -> TitleOverlay? {
         guard !title.isEmpty else { return nil }
         var h = Hasher()
         h.combine(title)
         h.combine(light)
-        return TitleOverlay(key: h.finalize(), timing: title.timing, scrim: title.placement == .centre ? 0.5 : 0) { w, hgt in
+        var overlay = TitleOverlay(key: h.finalize(), timing: title.timing, scrim: title.placement == .centre ? 0.5 : 0) { w, hgt in
             image(title, light: light, width: w, height: hgt)
         }
+        if title.beat, !cues.isEmpty {
+            overlay.cues = cues
+            overlay.pieces = { w, hgt in pieces(title, width: w, height: hgt) }
+        }
+        return overlay
     }
 
     static let paper = CGColor(srgbRed: 0.97, green: 0.965, blue: 0.955, alpha: 1)
@@ -70,7 +77,7 @@ public enum TitleArt {
     }
 
     static func block(_ text: String, font: CTFont, tracking: CGFloat, lineHeight: CGFloat, maxLines: Int,
-                      color: CGColor, maxWidth: CGFloat) -> Block? {
+                      color: CGColor, maxWidth: CGFloat, balanced: Bool = false) -> Block? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let size = CTFontGetSize(font)
         guard !trimmed.isEmpty, size > 1 else { return nil }
@@ -82,6 +89,28 @@ public enum TitleArt {
         let string = NSAttributedString(string: trimmed, attributes: attrs)
         let typesetter = CTTypesetterCreateWithAttributedString(string)
         let length = string.length
+        var width = maxWidth
+        if balanced {
+            // Break at the narrowest width that takes no more lines, so a title
+            // ends on a full line rather than one stray word.
+            func count(_ w: CGFloat) -> Int {
+                var n = 0, at = 0
+                while at < length, n <= maxLines {
+                    at += max(1, CTTypesetterSuggestLineBreak(typesetter, at, Double(w)))
+                    n += 1
+                }
+                return n
+            }
+            let lines = count(maxWidth)
+            if lines > 1, lines <= maxLines {
+                var lo = maxWidth * 0.45, hi = maxWidth
+                for _ in 0..<12 {
+                    let mid = (lo + hi) / 2
+                    if count(mid) == lines { hi = mid } else { lo = mid }
+                }
+                width = hi
+            }
+        }
         var lines: [CTLine] = []
         var start = 0
         while start < length {
@@ -92,7 +121,7 @@ public enum TitleArt {
                 lines.append(CTLineCreateTruncatedLine(rest, Double(maxWidth), .end, ellipsis) ?? rest)
                 break
             }
-            let count = max(1, CTTypesetterSuggestLineBreak(typesetter, start, Double(maxWidth)))
+            let count = max(1, CTTypesetterSuggestLineBreak(typesetter, start, Double(width)))
             lines.append(CTTypesetterCreateLine(typesetter, CFRange(location: start, length: count)))
             start += count
         }
@@ -124,6 +153,8 @@ public enum TitleArt {
         var total: CGFloat
         var card: Bool
         var margin: CGFloat
+        /// Whether the first block is the line above the title.
+        var hasKicker: Bool
     }
 
     static func setting(_ title: ReelTitle, color: CGColor, width W: CGFloat, height H: CGFloat) -> Setting? {
@@ -143,7 +174,7 @@ public enum TitleArt {
         let kicker = block(title.kicker.uppercased(), font: Faces.font(names.kicker, size: kickerPt), tracking: 0.16, lineHeight: 1.25,
                            maxLines: 2, color: color.copy(alpha: 0.82) ?? color, maxWidth: maxWidth)
         let main = block(title.text, font: Faces.font(names.title, size: titlePt), tracking: titleSetting.tracking,
-                         lineHeight: titleSetting.lineHeight, maxLines: 4, color: color, maxWidth: maxWidth)
+                         lineHeight: titleSetting.lineHeight, maxLines: 4, color: color, maxWidth: maxWidth, balanced: true)
         let gap = kickerPt * 1.0 + titlePt * 0.16
         let stack: [(Block, CGFloat)] = [kicker.map { ($0, kickerPt) }, main.map { ($0, titlePt) }].compactMap { $0 }
         guard !stack.isEmpty else { return nil }
@@ -160,7 +191,7 @@ public enum TitleArt {
         } else {
             top = H - inset.bottom - margin - total
         }
-        return Setting(stack: stack, gap: gap, top: top, total: total, card: card, margin: margin)
+        return Setting(stack: stack, gap: gap, top: top, total: total, card: card, margin: margin, hasKicker: kicker != nil)
     }
 
     /// How far a caption reaches into the frame from the edge it sits on, as
@@ -174,6 +205,58 @@ public enum TitleArt {
         let air = s.margin * 0.6
         if s.top < H / 2 { return (Double((s.top + s.total + air) / H), 0) }
         return (0, Double((H - s.top + air) / H))
+    }
+
+    /// Where each group of words that lands on the beat sits in a frame of this
+    /// pixel size: the line above as one piece, then the title's groups line by
+    /// line. The pieces tile the frame, split halfway across the space between
+    /// groups and between lines, so each carries its words' shadow with it.
+    public static func pieces(_ title: ReelTitle, width: Int, height: Int) -> [TitlePiece] {
+        let W = CGFloat(width), H = CGFloat(height)
+        guard width > 8, height > 8, let s = setting(title, color: ink, width: W, height: H) else { return [] }
+        let groups = ReelTitle.groups(title.text)
+        let first = s.hasKicker ? 1 : 0
+        struct Row {
+            var top: CGFloat
+            var bottom: CGFloat
+            var spans: [(x0: CGFloat, x1: CGFloat, cue: Int)]
+        }
+        var rows: [Row] = []
+        var top = s.top
+        for (k, (b, _)) in s.stack.enumerated() {
+            let kicker = s.hasKicker && k == 0
+            var baseline = top + b.cap
+            for line in b.lines {
+                let wide = b.width(line)
+                let x = s.card ? (W - wide) / 2 : s.margin
+                var spans: [(x0: CGFloat, x1: CGFloat, cue: Int)] = []
+                if kicker {
+                    spans = [(x, x + wide, 0)]
+                } else {
+                    let r = CTLineGetStringRange(line)
+                    let lo = r.location, hi = r.location + r.length
+                    for (g, range) in groups.enumerated() where range.lowerBound < hi && range.upperBound > lo {
+                        let a = CTLineGetOffsetForStringIndex(line, max(range.lowerBound, lo), nil)
+                        let e = CTLineGetOffsetForStringIndex(line, min(range.upperBound, hi), nil)
+                        spans.append((x + min(max(a, 0), wide), x + min(max(e, 0), wide), first + g))
+                    }
+                }
+                if !spans.isEmpty { rows.append(Row(top: baseline - b.cap, bottom: baseline + b.descent, spans: spans)) }
+                baseline += b.lineHeight
+            }
+            top += b.height + s.gap
+        }
+        var out: [TitlePiece] = []
+        for (i, row) in rows.enumerated() {
+            let y0 = i == 0 ? 0 : (rows[i - 1].bottom + row.top) / 2
+            let y1 = i == rows.count - 1 ? H : (row.bottom + rows[i + 1].top) / 2
+            for (j, span) in row.spans.enumerated() {
+                let x0 = j == 0 ? 0 : (row.spans[j - 1].x1 + span.x0) / 2
+                let x1 = j == row.spans.count - 1 ? W : (span.x1 + row.spans[j + 1].x0) / 2
+                out.append(TitlePiece(rect: SIMD4(Float(x0 / W), Float(y0 / H), Float(x1 / W), Float(y1 / H)), cue: span.cue))
+            }
+        }
+        return out
     }
 
     /// The title over a transparent frame of this pixel size.

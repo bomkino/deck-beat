@@ -238,6 +238,185 @@ enum Checks {
               && partial?.grid.rows == 5 && partial?.grid.shape == .auto && again == changed && fix == BeatFix.none,
               "empty, partial and future settings read; a round trip keeps every value")
 
+        // v3 ---------------------------------------------------------------
+
+        // Every drop move and turn, either feature style, on small and large
+        // decks of wide slides: each drop does what was asked, no card breaks,
+        // the pieces stay few enough to draw, and a loop closes on its first frame.
+        var v3Bad = 0, v3Configs = 0, mostCards = 0, v3Seam: Float = 0, v3SeamAt = ""
+        var movesMissed: [String] = []
+        for (k, move) in DropMove.allCases.enumerated() {
+            for turn in TurnStyle.allCases {
+                for slides in [8, 15, 30] {
+                    var m = BeatSettings()
+                    m.dropMove = move
+                    m.turn = turn
+                    m.featureStyle = (k + slides) % 2 == 0 ? .zoom : .lift
+                    m.feature = .twoBars
+                    m.outro = .loop
+                    m.mode = BeatMode.allCases[(k + slides) % BeatMode.allCases.count]
+                    if slides == 30 {
+                        m.grid.columns = 5
+                        m.grid.rows = 6
+                    }
+                    let layout = GridLayout(settings: m.grid, aspect: tall, slideAspect: wide)
+                    let p = Choreographer.plan(a, settings: m, layout: layout, slides: slides, clipStart: 0, clipLength: 30)
+                    if move != .light, !p.moments.contains(where: { $0.move == move }) { movesMissed.append("\(move.rawValue) \(slides)") }
+                    let scene = BeatScene(plan: p, layout: layout, settings: m)
+                    let ctx = context(slides, aspect: tall)
+                    v3Configs += 1
+                    var t = 0.0
+                    while t <= p.length {
+                        let cards = scene.frame(at: t, ctx).cards
+                        mostCards = max(mostCards, cards.count)
+                        for c in cards where !sound(c, slides: slides) {
+                            v3Bad += 1
+                            if v3Bad <= 3 { print("     pose \(move) \(turn) \(slides) t \(t): \(c.position) \(c.size) \(c.opacity)") }
+                        }
+                        t += 1.0 / 15
+                    }
+                    let first = scene.frame(at: 0, ctx), last = scene.frame(at: p.length - 1.0 / 240, ctx)
+                    var gap: Float = first.cards.count == last.cards.count ? 0 : .infinity
+                    for c in first.cards {
+                        guard let d = last.cards.first(where: { $0.occurrence == c.occurrence }) else { gap = .infinity; break }
+                        let move = c.position - d.position
+                        gap = max(gap, (move * move).sum().squareRoot(), abs(c.size.x - d.size.x), abs(c.opacity - d.opacity))
+                    }
+                    if gap > v3Seam {
+                        v3Seam = gap
+                        v3SeamAt = "\(move.rawValue) \(turn.rawValue) \(slides)"
+                    }
+                }
+            }
+        }
+        check("drop moves", movesMissed.isEmpty, movesMissed.isEmpty
+              ? "weave, tunnel, fan and strip each happen on the drop, on 8, 15 and 30 slides" : "fell back to light: " + movesMissed.joined(separator: ", "))
+        check("v3 poses", v3Bad == 0 && mostCards <= 800,
+              "\(v3Bad) broken cards across \(v3Configs) clips at 15 fps; at most \(mostCards) cards in a frame")
+        check("v3 loop seam", v3Seam < 0.02, String(format: "largest change %.4f (%@)", v3Seam, v3SeamAt as NSString))
+
+        // A zoom on a featured slide keeps it in the frame all the way, and
+        // inside the safe area once it is there, for every slide and canvas shape.
+        var zoomWorst: Float = -1, zoomSafe: Float = -1, zoomAt = "", zoomFrames = 0
+        for canvas in canvases {
+            for slideAspect in shapes {
+                var z = BeatSettings()
+                z.feature = .twoBars
+                z.featureStyle = .zoom
+                let layout = GridLayout(settings: z.grid, aspect: canvas, slideAspect: slideAspect)
+                let p = Choreographer.plan(a, settings: z, layout: layout, slides: 15, clipStart: 0, clipLength: 30)
+                let scene = BeatScene(plan: p, layout: layout, settings: z)
+                let ctx = SceneContext(items: (0..<15).map { SceneItem(media: $0, occurrence: $0, aspect: slideAspect) }, aspect: canvas,
+                                       dials: SceneDials())
+                let safeLo = layout.safeCentre - layout.safeSize / 2, safeHi = layout.safeCentre + layout.safeSize / 2
+                for f in p.features {
+                    for t in stride(from: f.liftOff, through: f.end, by: 1.0 / 30) {
+                        let frame = scene.frame(at: t, ctx)
+                        let eye = SIMD3<Float>(0, 0, GridLayout.eyeDistance) + frame.camera.offset
+                        for c in frame.cards where c.layer >= 10 {
+                            let k = GridLayout.eyeDistance / (eye.z - c.position.z)
+                            let centre = (SIMD2(c.position.x, c.position.y) - SIMD2(eye.x, eye.y)) * k
+                            let half = c.size * k / 2
+                            let over = max(abs(centre.x) + half.x - canvas / 2, abs(centre.y) + half.y - 0.5)
+                            zoomFrames += 1
+                            if over > zoomWorst {
+                                zoomWorst = over
+                                zoomAt = String(format: "canvas %.2f, slide %.2f, t %.2f", canvas, slideAspect, t)
+                            }
+                            if t >= f.land, t <= f.leave {
+                                let lo = centre - half, hi = centre + half
+                                zoomSafe = max(zoomSafe, safeLo.x - lo.x, safeLo.y - lo.y, hi.x - safeHi.x, hi.y - safeHi.y)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        check("zoom fits", zoomFrames > 0 && zoomWorst <= -0.005 && zoomSafe <= 0.005,
+              String(format: "%d frames zoomed; at most %.3f from the frame's edge (%@), %.3f past the safe area", zoomFrames, zoomWorst,
+                     zoomAt as NSString, zoomSafe))
+
+        // Words on the beat: one landing per group, in order, each on a beat or
+        // half a beat; inside an opening or closing title's window with time to
+        // read; and gone again on a loop's first and last frames.
+        let headline = ReelTitle(text: "Brightside raises its Series A", kicker: "pitch.dog · 2026", placement: .centre, timing: .opening,
+                                 beat: true)
+        let groups = ReelTitle.groups(headline.text)
+        var wordsBad: [String] = [], cueCount = 0
+        for timing in ReelTitle.Timing.allCases {
+            for outro in [Outro.loop, .close] {
+                for length in [15.0, 30.0] {
+                    var m = BeatSettings()
+                    m.outro = outro
+                    let p = Choreographer.plan(a, settings: m, layout: grid, slides: 15, clipStart: 0, clipLength: length)
+                    var title = headline
+                    title.timing = timing
+                    let cues = WordTiming.cues(title, plan: p)
+                    let name = "\(timing.rawValue) \(outro.rawValue) \(Int(length)) s"
+                    cueCount += cues.count
+                    guard cues.count == title.beatGroups else {
+                        wordsBad.append("\(name): \(cues.count) cues")
+                        continue
+                    }
+                    let halves = zip(p.beats, p.beats.dropFirst()).map { ($0 + $1) / 2 }
+                    for (i, c) in cues.enumerated() {
+                        let onBeat = (p.beats + halves).contains { abs($0 - c.land) < 1e-6 }
+                        if !onBeat || (i > 0 && c.land <= cues[i - 1].land) { wordsBad.append(String(format: "%@: cue %d at %.3f", name as NSString, i, c.land)) }
+                        if c.leave.isFinite, c.leave < c.land + 1 { wordsBad.append("\(name): cue \(i) leaves too soon") }
+                    }
+                    if let w = timing.window(loop: p.length), let first = cues.first, let last = cues.last {
+                        if first.land - first.lead < w.start - 1e-6 || last.land > w.end - 0.3 { wordsBad.append("\(name): outside its window") }
+                        if !cues.allSatisfy({ $0.presence(at: w.end - 0.01).alpha > 0.999 }) { wordsBad.append("\(name): not all shown") }
+                    }
+                    if timing == .throughout, p.outro.kind == .loop {
+                        let seen = cues.map { max($0.presence(at: 0).alpha, $0.presence(at: p.length - 1.0 / 240).alpha) }.max() ?? 0
+                        if seen > 0.001 { wordsBad.append("\(name): words at the seam") }
+                    }
+                }
+            }
+        }
+        check("words on the beat", groups.count == 3 && wordsBad.isEmpty,
+              wordsBad.isEmpty ? "\(cueCount) landings over 12 clips; groups: " + groups.map { "\($0.count)" }.joined(separator: ", ") + " characters"
+                  : wordsBad.prefix(4).joined(separator: "; "))
+
+        // Restraint holds round the new drops too: outside a drop's own moment,
+        // no more than 40% of the grid is past half lit.
+        var shapePeak: Float = 0, shapeCap: Float = 1
+        for move in DropMove.allCases where move != .light {
+            var m = BeatSettings()
+            m.dropMove = move
+            m.outro = .loop
+            let p = Choreographer.plan(a, settings: m, layout: grid, slides: 15, clipStart: 0, clipLength: 30)
+            var t = p.intro.end + p.period
+            while t < p.outro.start {
+                let busy = p.drops.contains(where: { t > $0 - p.period && t < $0 + 4 * p.period })
+                    || p.moments.contains(where: { t >= $0.start && t <= $0.end + p.period })
+                    || p.features.contains(where: { t >= $0.liftOff && t <= $0.end })
+                if !busy {
+                    var lit = 0
+                    for c in 0..<p.cells where p.light(cell: c, at: t).level > 0.5 { lit += 1 }
+                    shapePeak = max(shapePeak, Float(lit) / Float(p.cells))
+                }
+                t += 1.0 / 30
+            }
+            shapeCap = Float(max(1, Int(Float(p.cells) * 0.4))) / Float(p.cells)
+        }
+        check("restraint round drops", shapePeak <= shapeCap + 1e-4, String(format: "peak %.2f of the grid lit away from the drop", shapePeak))
+
+        // Projects from 2.0 open in 3.0 with the moves they had, and the new
+        // choices survive a round trip; a title from 2.0 doesn't land on the beat.
+        var v3 = BeatSettings()
+        v3.dropMove = .fan
+        v3.featureStyle = .zoom
+        v3.turn = .page
+        v3.intro.entrance = .weave
+        let v3Again = (try? JSONEncoder().encode(v3)).flatMap { try? decoder.decode(BeatSettings.self, from: $0) }
+        let oldTitle = try? decoder.decode(ReelTitle.self, from: Data(#"{"text":"Hi","placement":"centre","timing":"opening"}"#.utf8))
+        let titleAgain = (try? JSONEncoder().encode(headline)).flatMap { try? decoder.decode(ReelTitle.self, from: $0) }
+        check("old projects 3.0", empty?.dropMove == .light && empty?.featureStyle == .lift && empty?.turn == .flip && v3Again == v3
+              && oldTitle?.beat == false && oldTitle?.text == "Hi" && titleAgain == headline,
+              "2.0 settings and titles read with 3.0 defaults; a round trip keeps the new choices")
+
         // Decks made for wide screens: 2576 × 1080 and 1920 × 1080 slides in a
         // 1080 × 1920 frame. The fitted grid holds the deck with less than a row
         // spare, inside the safe area, cropping at most a third of a slide.
