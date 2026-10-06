@@ -379,6 +379,8 @@ public struct BeatScene: StageScene {
             card.reveal = Ease.inOutCubic(min(1, p * 1.2))
             card.foldPhase = 0
             fade(0.15)
+        case .blinds, .page, .weave:
+            fade(0.3)
         }
         return card
     }

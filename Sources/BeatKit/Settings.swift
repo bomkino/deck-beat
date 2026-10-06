@@ -249,7 +249,7 @@ public struct GridSettings: Codable, Hashable, Sendable {
 
 /// How the cards arrive.
 public enum Entrance: String, Codable, CaseIterable, Identifiable, Sendable {
-    case deal, rise, depth, flip, drop, assemble, unfold
+    case deal, rise, depth, flip, drop, assemble, unfold, blinds, page, weave
 
     public var id: String { rawValue }
     public var title: String {
@@ -261,6 +261,9 @@ public enum Entrance: String, Codable, CaseIterable, Identifiable, Sendable {
         case .drop: return "Drop"
         case .assemble: return "Assemble"
         case .unfold: return "Unfold"
+        case .blinds: return "Blinds"
+        case .page: return "Page"
+        case .weave: return "Weave"
         }
     }
     public var summary: String {
@@ -272,6 +275,72 @@ public enum Entrance: String, Codable, CaseIterable, Identifiable, Sendable {
         case .drop: return "Falling in from above with one bounce."
         case .assemble: return "Gathering from a scatter."
         case .unfold: return "Opening like folded paper."
+        case .blinds: return "Slats turning face on, top to bottom."
+        case .page: return "Laid down like a page, from its left edge."
+        case .weave: return "Threads sliding in from both sides and knitting together."
+        }
+    }
+}
+
+/// What the grid does on a drop, after the breath before it.
+public enum DropMove: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// Every slide lights from the middle out, with a flash and a push in.
+    case light
+    /// The slides come apart into threads over the bar before, and knit back on the hit.
+    case weave
+    /// The grid breaks into a tunnel of slides on the hit and comes home on a later downbeat.
+    case tunnel
+    /// Fanned out like a hand of cards, then home.
+    case fan
+    /// One strip of slides that steps along on every beat, then home.
+    case strip
+
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .light: return "Light"
+        case .weave: return "Weave"
+        case .tunnel: return "Tunnel"
+        case .fan: return "Fan"
+        case .strip: return "Strip"
+        }
+    }
+    public var summary: String {
+        switch self {
+        case .light: return "Every slide lights from the middle out, with a flash and a push in."
+        case .weave: return "Over the bar before, each slide comes apart into threads; on the hit they knit back together."
+        case .tunnel: return "On the hit the grid breaks into a tunnel of slides that turns towards you, then comes home on a downbeat."
+        case .fan: return "On the hit the slides fan out like a hand of cards, the cover on top, then come home on a downbeat."
+        case .strip: return "On the hit the grid becomes one strip of slides that steps along on every beat, then comes home on a downbeat."
+        }
+    }
+
+    /// The grid leaves its cells for a shape and comes home.
+    public var reforms: Bool { self == .tunnel || self == .fan || self == .strip }
+}
+
+/// How a featured slide is brought forward.
+public enum FeatureStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// It steps out of the grid towards the camera.
+    case lift
+    /// The camera moves in on it where it hangs, and the grid falls away round the edges.
+    case zoom
+
+    public var id: String { rawValue }
+    public var title: String { self == .lift ? "Step out" : "Zoom in" }
+}
+
+/// How a cell turns over to show another slide.
+public enum TurnStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+    case flip, blinds, wipe, page
+
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .flip: return "Flip"
+        case .blinds: return "Blinds"
+        case .wipe: return "Wipe"
+        case .page: return "Page"
         }
     }
 }
@@ -356,6 +425,7 @@ public struct BeatSettings: Codable, Hashable, Sendable {
     public var feature: FeatureEvery = .fourBars
     /// Spotlight: the grid behind a featured slide steps right back.
     public var spotlight = false
+    public var featureStyle: FeatureStyle = .lift
     /// 0…1: how readily the grid answers, and how much of it.
     public var sensitivity: Float = 0.6
     public var listen: Listen = .everything
@@ -363,6 +433,9 @@ public struct BeatSettings: Codable, Hashable, Sendable {
     public var atmosphere: Float = 0.5
     /// The breath before a drop and the hit on it.
     public var drops = true
+    public var dropMove: DropMove = .light
+    /// How cells turn over to show the rest of a big deck.
+    public var turn: TurnStyle = .flip
     /// Ripple: how long a ring takes to cross the grid, in beats, 0.25…2.
     public var spread: Float = 0.75
     /// Read-through steps, in beats, or 0 to fit one pass of the deck to four bars.
@@ -499,10 +572,13 @@ extension BeatSettings {
         c.update(&outro, .outro)
         c.update(&feature, .feature)
         c.update(&spotlight, .spotlight)
+        c.update(&featureStyle, .featureStyle)
         c.update(&sensitivity, .sensitivity)
         c.update(&listen, .listen)
         c.update(&atmosphere, .atmosphere)
         c.update(&drops, .drops)
+        c.update(&dropMove, .dropMove)
+        c.update(&turn, .turn)
         c.update(&spread, .spread)
         c.update(&step, .step)
         c.update(&fromMiddle, .fromMiddle)

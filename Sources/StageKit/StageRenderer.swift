@@ -393,12 +393,17 @@ public final class StageRenderer {
         let parent = c.size / extent
         let minSide = min(parent.x, parent.y)
         let corner = c.corner * (0.4 + 1.6 * look.corners) * minSide
-        let bendKind: Float
+        var bendKind: Float
         switch look.bend {
         case .rigid: bendKind = 0
         case .card: bendKind = 1
         case .paper: bendKind = 2
         case .silk: bendKind = 3
+        }
+        var bendAmount = look.bendAmount
+        if let flex = c.flex {
+            bendKind = 2
+            bendAmount = flex
         }
         let surface: Float
         switch look.surface {
@@ -411,7 +416,7 @@ public final class StageRenderer {
         return CardUniforms(
             model: model,
             sizeCorner: SIMD4(c.size.x, c.size.y, corner, c.opacity),
-            deform: SIMD4(c.curl * look.bendAmount, c.fold * look.bendAmount, c.foldPhase, bendKind),
+            deform: SIMD4(c.curl * bendAmount, c.fold * bendAmount, c.foldPhase, bendKind),
             media: SIMD4(c.fit == .fill ? 0 : 1, c.focal.x, c.focal.y, c.solid ? parent.x / max(parent.y, 0.0001) : c.mediaAspect),
             fx: SIMD4(c.glow, c.blur, c.shadow, c.solid ? 0 : surface),
             mirror: mirror,
