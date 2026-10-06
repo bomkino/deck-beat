@@ -218,12 +218,16 @@ struct BeatCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
                 .disabled(session == nil)
             Divider()
+            // The sheet waits for the song and every slide before it exports.
             Button("Export…") { session?.showExport = true }
                 .keyboardShortcut("e", modifiers: [.command])
                 .disabled(session == nil)
         }
+        // Nothing here prints, and ⌘P plays.
+        CommandGroup(replacing: .printItem) {}
         CommandMenu("Beat") {
             Button("Play or Pause") { session?.togglePlay() }
+                .keyboardShortcut("p", modifiers: [.command])
                 .disabled(session == nil)
             Button("Back to the Start") { session?.rewind() }
                 .keyboardShortcut(.leftArrow, modifiers: [.command])
@@ -249,7 +253,8 @@ enum BeatPanels {
         panel.message = "Choose slides: images, PDFs (each page becomes a slide) or clips."
         panel.begin { response in
             guard response == .OK else { return }
-            let urls = panel.urls
+            // In the order Finder lists them by name, so slide 2 comes before slide 10.
+            let urls = panel.urls.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             MainActor.assumeIsolated { session.importSlides(urls) }
         }
     }

@@ -45,6 +45,24 @@ final class BeatSession: StageSource {
     @ObservationIgnored private var plannedMemo: [Float: (version: Int, planned: Planned)] = [:]
     @ObservationIgnored private var compositionMemo: [Float: (version: Int, composition: Composition)] = [:]
     @ObservationIgnored private var fixedAnalysis: (song: ObjectIdentifier, fix: BeatFix, analysis: SongAnalysis)?
+    /// Slides being loaded now, so an import or undo meanwhile never queues them twice.
+    @ObservationIgnored private var inFlight: Set<UUID> = []
+    /// Slides whose files could not be read; they are not tried again.
+    @ObservationIgnored private var failedMedia: Set<UUID> = []
+    /// Names of slides that could not be read in the current batch.
+    @ObservationIgnored private var unreadable: [String] = []
+    /// Slides loading at a size since given up for a smaller one; they load again when they finish.
+    @ObservationIgnored private var staleLoads: Set<UUID> = []
+    /// The largest texture side loaded, so a deck grown past it loads smaller.
+    @ObservationIgnored private var loadedSide: Int?
+    /// A few at a time, in rail order: each load holds a full-size raster, and
+    /// a 100-page PDF loaded all at once can take gigabytes.
+    @ObservationIgnored private lazy var loadQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 3
+        q.qualityOfService = .userInitiated
+        return q
+    }()
 
     /// A plan and what goes with it, for one canvas.
     struct Planned: Sendable {
@@ -136,8 +154,17 @@ final class BeatSession: StageSource {
     var fps: Int { project.fps }
     var format: CanvasFormat { project.format }
     var look: Look { Looks.look(project.look) }
-    var exportName: String { "Deck Beat " + look.name }
     var soundTitle: String? { song?.title }
+
+    /// Where this window's document is saved, or nil while it is untitled.
+    @ObservationIgnored var documentURL: URL?
+
+    /// The saved document's name and the look, so exports of different
+    /// projects never share a name.
+    var exportName: String {
+        if let url = documentURL { return url.deletingPathExtension().lastPathComponent + " " + look.name }
+        return "Deck Beat " + look.name
+    }
 
     // MARK: Background
 
@@ -516,6 +543,8 @@ final class BeatSession: StageSource {
             Self.refit(&p)
         }
         if let s = selection, ids.contains(s) { selection = project.slides.first?.id }
+        // Lets go of the removed slides' textures; an undo loads them again.
+        loadMedia()
     }
 
     func move(from source: IndexSet, to destination: Int) {
@@ -555,17 +584,39 @@ final class BeatSession: StageSource {
         }
     }
 
-    /// Loads textures and thumbnails for slides that have none yet.
+    /// Loads textures and thumbnails for slides that have none yet, three at
+    /// a time, and lets go of slides no longer in the project. When the deck
+    /// has grown so far that its textures should shrink, loads them all again smaller.
     func loadMedia() {
+        let ids = Set(project.slides.map(\.id))
+        textures = textures.filter { ids.contains($0.key) }
+        thumbnails = thumbnails.filter { ids.contains($0.key) }
+        slidePalettes = slidePalettes.filter { ids.contains($0.key) }
+        clipDurations = clipDurations.filter { ids.contains($0.key) }
+        failedMedia.formIntersection(ids)
         let side = MediaLoader.textureSide(forItems: project.slides.count)
-        let missing = project.slides.filter { textures[$0.id] == nil }
-        guard !missing.isEmpty else { return }
-        importing += missing.count
+        if let loaded = loadedSide, Double(side) < Double(loaded) * 0.8 {
+            staleLoads = inFlight
+            load(project.slides.filter { !inFlight.contains($0.id) && !failedMedia.contains($0.id) })
+            loadedSide = side
+            return
+        }
+        let missing = project.slides.filter { textures[$0.id] == nil && !inFlight.contains($0.id) && !failedMedia.contains($0.id) }
+        load(missing)
+    }
+
+    private func load(_ items: [MediaItem]) {
+        guard !items.isEmpty else { return }
+        if importing == 0 { unreadable = [] }
+        importing += items.count
+        inFlight.formUnion(items.map(\.id))
+        let side = MediaLoader.textureSide(forItems: project.slides.count)
+        loadedSide = items.count >= project.slides.count ? side : max(loadedSide ?? side, side)
         let store = document.media
-        for item in missing {
+        for item in items {
             let url = store.url(for: item.file)
-            let kind = item.kind, page = item.page, id = item.id
-            if kind == .video {
+            let kind = item.kind, page = item.page, id = item.id, name = item.name
+            if kind == .video, clipDurations[id] == nil {
                 // How long the clip runs, for a slide that plays it through.
                 Task { [weak self] in
                     guard let d = try? await AVURLAsset(url: url).load(.duration).seconds, d.isFinite, let self else { return }
@@ -574,14 +625,27 @@ final class BeatSession: StageSource {
                     self.clock.duration = self.loopDuration
                 }
             }
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let tex = try? MediaLoader.load(url: url, kind: kind, page: page, maxSide: side)
-                let thumb = MediaLoader.cgImage(url: url, kind: kind, page: page, maxSide: 360)
+            loadQueue.addOperation { [weak self] in
+                // One raster serves both: the texture, and the rail's thumbnail scaled from it.
+                let (tex, thumb) = MediaLoader.loadWithThumbnail(url: url, kind: kind, page: page, maxSide: side, thumbnailSide: 360)
                 let palette = thumb.flatMap { Palette.extract(from: [$0], name: "") }
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.importing = max(0, self.importing - 1)
-                    if let tex {
+                    self.inFlight.remove(id)
+                    let present = self.project.slides.contains(where: { $0.id == id })
+                    if tex == nil, present {
+                        self.failedMedia.insert(id)
+                        self.unreadable.append(name)
+                    }
+                    if self.importing == 0, !self.unreadable.isEmpty {
+                        let names = ListFormatter.localizedString(byJoining: self.unreadable)
+                        let one = self.unreadable.count == 1
+                        self.message = "\(names) could not be read, so \(one ? "it shows" : "they show") as a grey slide. Try exporting the file again, or replace it."
+                        self.unreadable = []
+                    }
+                    // A slide removed while it loaded is not kept.
+                    if present, let tex {
                         self.textures[id] = tex
                         if let i = self.project.slides.firstIndex(where: { $0.id == id }), abs(self.project.slides[i].aspect - tex.aspect) > 0.001 {
                             // The true shape, recorded without an undo step.
@@ -592,10 +656,14 @@ final class BeatSession: StageSource {
                             self.document.project = p
                         }
                     }
-                    if let thumb { self.thumbnails[id] = thumb }
-                    if let palette { self.slidePalettes[id] = palette }
+                    if present, let thumb { self.thumbnails[id] = thumb }
+                    if present, let palette { self.slidePalettes[id] = palette }
                     self.version += 1
                     self.clock.duration = self.loopDuration
+                    // Loaded at a size since given up for a smaller one: load again.
+                    if self.staleLoads.remove(id) != nil, tex != nil, let item = self.project.slides.first(where: { $0.id == id }) {
+                        self.load([item])
+                    }
                 }
             }
         }

@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct BeatRoot: View {
     @State private var session: BeatSession
     @Environment(\.undoManager) private var undoManager
+    @Environment(\.documentConfiguration) private var documentConfiguration
     @AppStorage("appearance") private var appearance = AppearanceChoice.dark.rawValue
 
     init(document: BeatDocument) {
@@ -20,6 +21,8 @@ struct BeatRoot: View {
                 session.start()
             }
             .onChange(of: undoManager) { _, um in session.undoManager = um }
+            // Exports are named after the saved document.
+            .onChange(of: documentConfiguration?.fileURL, initial: true) { _, url in session.documentURL = url }
             .preferredColorScheme(AppearanceChoice(rawValue: appearance)?.colorScheme)
             .focusedSceneValue(\.beatSession, session)
             .modifier(BeatSnapshotHost(session: session))
@@ -111,7 +114,9 @@ struct BeatStage: View {
                     ? CGSize(width: avail.height * aspect, height: avail.height)
                     : CGSize(width: avail.width, height: avail.width / aspect)
                 let scale = NSScreen.main?.backingScaleFactor ?? 2
-                let k = min(1, 2400 / max(fitted.width, fitted.height) / scale)
+                // Never more pixels than the export has: the stage only shows it.
+                let canvas = CGFloat(max(session.project.format.width, session.project.format.height))
+                let k = min(1, min(2400, canvas) / max(fitted.width, fitted.height) / scale)
                 let px = CGSize(width: (fitted.width * scale * k).rounded(), height: (fitted.height * scale * k).rounded())
                 ZStack {
                     Theme.surround
