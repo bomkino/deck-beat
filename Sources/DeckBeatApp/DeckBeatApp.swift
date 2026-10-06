@@ -12,6 +12,8 @@ struct DeckBeatApp: App {
     @StateObject private var updates = AppUpdates(start: !StudioSnapshot.isRequested)
 
     init() {
+        // Headless runs report each step as it happens, even into a pipe.
+        if StudioSnapshot.isRequested { setvbuf(stdout, nil, _IOLBF, 0) }
         UserDefaults.standard.register(defaults: [
             "appearance": AppearanceChoice.dark.rawValue,
             // Open on a new window, ready to go, rather than on the Open panel.
