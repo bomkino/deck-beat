@@ -52,8 +52,10 @@ codesign -v --strict "$WORK/old.app"
 VERSION_OVERRIDE=9.0.1 bash scripts/build.sh release > "$WORK/build-new.log" 2>&1 || { cat "$WORK/build-new.log"; exit 1; }
 bash scripts/pack-release.sh "$WORK/feed" > /dev/null
 DOWNLOAD_URL="http://127.0.0.1:$PORT/" bash scripts/sign-release.sh "$WORK/feed"
-grep -q 'sparkle:shortVersionString="9.0.1"' "$WORK/feed/appcast.xml"
-grep -q 'sparkle:edSignature=' "$WORK/feed/appcast.xml"
+# Sparkle 2 writes the version as an element; older feeds had it as an attribute.
+grep -Eq 'sparkle:shortVersionString(>|=")9\.0\.1' "$WORK/feed/appcast.xml" \
+  && grep -q 'sparkle:edSignature=' "$WORK/feed/appcast.xml" \
+  || { echo "feed: no signed 9.0.1 in appcast.xml"; cat "$WORK/feed/appcast.xml"; exit 1; }
 (cd "$WORK/feed" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 > "$WORK/server.log" 2>&1) &
 SERVER=$!
 sleep 1

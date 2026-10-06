@@ -12,8 +12,14 @@ struct DeckBeatApp: App {
     @StateObject private var updates = AppUpdates(start: !StudioSnapshot.isRequested)
 
     init() {
-        // Headless runs report each step as it happens, even into a pipe.
-        if StudioSnapshot.isRequested { setvbuf(stdout, nil, _IOLBF, 0) }
+        if StudioSnapshot.isRequested {
+            // Headless runs report each step as it happens, even into a pipe.
+            setvbuf(stdout, nil, _IOLBF, 0)
+            // Their words are flags and values, never documents: without this, a
+            // value after a bare flag (`--beat-words --title "Words"`) is opened
+            // as a file, and the error it raises waits for a click that never comes.
+            UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
+        }
         UserDefaults.standard.register(defaults: [
             "appearance": AppearanceChoice.dark.rawValue,
             // Open on a new window, ready to go, rather than on the Open panel.

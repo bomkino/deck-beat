@@ -50,11 +50,11 @@ if [ -n "$NOTES" ]; then cp "$NOTES" "$work/cast/${ZIP%.zip}.md"; fi
 "$SPARKLE_BIN/generate_appcast" --ed-key-file "$SPARKLE_KEY" --download-url-prefix "$DOWNLOAD_URL" \
   --link "https://github.com/$REPO/releases" --embed-release-notes --maximum-versions 1 -o "$DIR/appcast.xml" "$work/cast" >/dev/null
 grep -q "sparkle:edSignature=" "$DIR/appcast.xml" || { echo "appcast.xml has no signature"; exit 1; }
-grep -o 'sparkle:shortVersionString="[^"]*"\|url="[^"]*"' "$DIR/appcast.xml" | head -2
+grep -Eo 'sparkle:shortVersionString(>[^<]+|="[^"]+")|url="[^"]*"' "$DIR/appcast.xml" | head -2
 
 if [ ! -d "$WHAT" ]; then
   gh release upload "v$VERSION" -R "$REPO" "$DIR/appcast.xml" --clobber
   echo "The feed now offers:"
-  curl -fsSL "https://github.com/$REPO/releases/latest/download/appcast.xml" | grep -o 'sparkle:shortVersionString="[^"]*"' \
+  curl -fsSL "https://github.com/$REPO/releases/latest/download/appcast.xml" | grep -Eo 'sparkle:shortVersionString(>[^<]+|="[^"]+")' \
     || echo "nothing yet: v$VERSION may not be the Latest release"
 fi
