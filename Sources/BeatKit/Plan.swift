@@ -663,7 +663,8 @@ public enum Choreographer {
             let departing = builds ? reverseOrder : Self.scatterOrder(layout, seed: s.seed).filter { $0 != cover }
             let m = departing.count
             let total = position(length)
-            let lastBeat = (total - 1e-3).rounded(.down)
+            // The last beat with room after it for the cover to go.
+            let lastBeat = position(length - period * 0.5).rounded(.down)
             let budget = min(16, max(4, (total - position(introEnd)) * 0.3))
             var stepOut = 0.25
             let options = builds && buildStep > 0 ? [buildStep] + [1.0, 0.5, 0.25].filter { $0 < buildStep } : [1.0, 0.5, 0.25]
