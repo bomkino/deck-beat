@@ -1,0 +1,65 @@
+# Builds Deck Beat and beat-lab on an Apple silicon runner with Xcode, for each
+# push, each pull request from a fork and on demand, then runs beat-lab's CPU
+# checks, renders its contact sheet and demo clip, and opens the app bundle to
+# render a still and capture its window. The renders are kept as the
+# deck-beat-lab artifact. The render needs Metal; on a runner without it
+# beat-lab says "skipped:" and passes. scripts/verify.sh renders every Look
+# through the app; run it locally before a release.
+name: verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # A pull request from a branch of this repository is already built by its push.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show the toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Build Deck Beat
+        run: swift build -c release --product DeckBeat
+      - name: Build beat-lab
+        run: swift build -c release --product beat-lab
+      - name: Run the beat-lab checks
+        run: |
+          "$(swift build -c release --show-bin-path)/beat-lab" check
+      - name: Render the contact sheet and demo clip
+        run: |
+          "$(swift build -c release --show-bin-path)/beat-lab" render --out lab-output
+      - name: Open the app, render a still and capture its window
+        run: |
+          bash scripts/build.sh release
+          APP="../dist/Deck Beat.app/Contents/MacOS/DeckBeat"
+          mkdir -p lab-output
+          # A new window with the sample deck and demo groove, rendered through the app's own session.
+          perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still.png --look ripple --format reel --time 2
+          # The whole window, inspector and transport included, once it has settled,
+          # and the screen as the runner shows it, which also catches glass and vibrancy.
+          perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1220x720 --time 2 --settle 10 > "$RUNNER_TEMP/app.log" 2>&1 &
+          for i in $(seq 1 120); do grep -q "snapshot: ready" "$RUNNER_TEMP/app.log" && break; sleep 1; done
+          sleep 4
+          screencapture -x lab-output/app-screen.png || echo "screencapture: not allowed on this runner"
+          wait
+          cat "$RUNNER_TEMP/app.log"
+          # Small copies in the log, for reviewers who can't download the artifact.
+          for f in app-window app-screen; do
+            [ -s "lab-output/$f.png" ] || continue
+            sips -s format jpeg -s formatOptions 70 -Z 1200 "lab-output/$f.png" --out "$RUNNER_TEMP/$f.jpg" >/dev/null
+            echo "thumbnail: $f.jpg"
+            base64 -b 1000 -i "$RUNNER_TEMP/$f.jpg" | sed "s/^/b64-$f /"
+          done
+      - name: Keep the renders
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deck-beat-lab
+          path: lab-output
+          if-no-files-found: ignore
