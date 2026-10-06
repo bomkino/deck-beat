@@ -3,9 +3,12 @@ import CoreText
 import Foundation
 
 extension ReelTitle.Face {
-    /// PostScript names of the title, then the line above it.
+    /// PostScript names of the title, then the line above it. The pitch.dog
+    /// faces come from the bundled fonts; these are what they fall back to.
     var fontNames: (title: String, kicker: String) {
         switch self {
+        case .pitchdog: return ("AvenirNext-DemiBold", "AvenirNext-Medium")
+        case .pitchdogItalic: return ("AvenirNext-DemiBoldItalic", "AvenirNext-Medium")
         case .modern: return ("AvenirNext-Bold", "AvenirNext-DemiBold")
         case .grotesk: return ("HelveticaNeue-Bold", "HelveticaNeue-Medium")
         case .editorial: return ("Didot", "AvenirNext-DemiBold")
@@ -16,6 +19,8 @@ extension ReelTitle.Face {
     /// Line height and tracking (in em) the title is set with.
     var titleSetting: (lineHeight: CGFloat, tracking: CGFloat) {
         switch self {
+        // The type system's social.display: PD Head 600, 0.88 leading, −0.043 em.
+        case .pitchdog, .pitchdogItalic: return (0.88, -0.043)
         case .modern: return (1.04, -0.018)
         case .grotesk: return (1.02, -0.024)
         case .editorial: return (1.06, -0.012)
@@ -27,9 +32,35 @@ extension ReelTitle.Face {
     /// face reads at about the same weight on the frame.
     var scale: CGFloat {
         switch self {
+        case .pitchdog, .pitchdogItalic: return 1.06
         case .modern, .grotesk: return 1
         case .editorial: return 1.14
         case .poster: return 1.2
+        }
+    }
+
+    /// The title's font at `size`: PD Head at 600 for pitch.dog, upright or italic.
+    public func titleFont(_ size: CGFloat) -> CTFont {
+        switch self {
+        case .pitchdog: return PDType.head(size, weight: 600) ?? Faces.font(fontNames.title, size: size)
+        case .pitchdogItalic: return PDType.head(size, weight: 600, italic: true) ?? Faces.font(fontNames.title, size: size)
+        default: return Faces.font(fontNames.title, size: size)
+        }
+    }
+
+    /// The line above's font at `size`: PD Eyebrow 500 at its narrow width for pitch.dog (social.metadata).
+    func kickerFont(_ size: CGFloat) -> CTFont {
+        switch self {
+        case .pitchdog, .pitchdogItalic: return PDType.eyebrow(size) ?? Faces.font(fontNames.kicker, size: size)
+        default: return Faces.font(fontNames.kicker, size: size)
+        }
+    }
+
+    /// Tracking of the line above's capitals, in em.
+    var kickerTracking: CGFloat {
+        switch self {
+        case .pitchdog, .pitchdogItalic: return 0.055
+        default: return 0.16
         }
     }
 }
@@ -51,6 +82,7 @@ public enum TitleArt {
         if title.beat, !cues.isEmpty {
             overlay.cues = cues
             overlay.pieces = { w, hgt in pieces(title, width: w, height: hgt) }
+            overlay.motion = title.motion
         }
         return overlay
     }
@@ -170,16 +202,15 @@ public enum TitleArt {
         let face = title.face
         let titlePt = titleSize(card: card, W, H) * face.scale
         let kickerPt = kickerSize(W, H)
-        let names = face.fontNames
         let titleSetting = face.titleSetting
 
         // Measure: a caption stays in its corner's column; a title card stays
         // clear of a reel's side controls on both sides, so it stays centred.
         let side = card ? max(inset.right, margin * 1.6) : margin
         let maxWidth = card ? W - 2 * side : min(W * 0.62, W - 2 * margin - inset.right)
-        let kicker = block(title.kicker.uppercased(), font: Faces.font(names.kicker, size: kickerPt), tracking: 0.16, lineHeight: 1.25,
+        let kicker = block(title.kicker.uppercased(), font: face.kickerFont(kickerPt), tracking: face.kickerTracking, lineHeight: 1.25,
                            maxLines: 2, color: color.copy(alpha: 0.82) ?? color, maxWidth: maxWidth)
-        let main = block(title.text, font: Faces.font(names.title, size: titlePt), tracking: titleSetting.tracking,
+        let main = block(title.text, font: face.titleFont(titlePt), tracking: titleSetting.tracking,
                          lineHeight: titleSetting.lineHeight, maxLines: 4, color: color, maxWidth: maxWidth, balanced: true)
         let gap = kickerPt * 1.0 + titlePt * 0.16
         let stack: [(Block, CGFloat)] = [kicker.map { ($0, kickerPt) }, main.map { ($0, titlePt) }].compactMap { $0 }
@@ -247,7 +278,12 @@ public enum TitleArt {
                         spans.append((x + min(max(a, 0), wide), x + min(max(e, 0), wide), first + g))
                     }
                 }
-                if !spans.isEmpty { rows.append(Row(top: baseline - b.cap, bottom: baseline + b.descent, spans: spans)) }
+                // Split by the ink, not the font's line box: set tight, a line's box reaches well into
+                // the next line's capitals, and a split there shows their tops before they arrive.
+                let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+                let inkTop = ink.isEmpty ? baseline - b.cap : baseline - ink.maxY
+                let inkBottom = ink.isEmpty ? baseline : baseline - min(ink.minY, 0)
+                if !spans.isEmpty { rows.append(Row(top: inkTop, bottom: inkBottom, spans: spans)) }
                 baseline += b.lineHeight
             }
             top += b.height + s.gap
@@ -259,7 +295,8 @@ public enum TitleArt {
             for (j, span) in row.spans.enumerated() {
                 let x0 = j == 0 ? 0 : (row.spans[j - 1].x1 + span.x0) / 2
                 let x1 = j == row.spans.count - 1 ? W : (span.x1 + row.spans[j + 1].x0) / 2
-                out.append(TitlePiece(rect: SIMD4(Float(x0 / W), Float(y0 / H), Float(x1 / W), Float(y1 / H)), cue: span.cue))
+                let words = SIMD4(Float(span.x0 / W), Float(row.top / H), Float(span.x1 / W), Float(row.bottom / H))
+                out.append(TitlePiece(rect: SIMD4(Float(x0 / W), Float(y0 / H), Float(x1 / W), Float(y1 / H)), cue: span.cue, words: words))
             }
         }
         return out

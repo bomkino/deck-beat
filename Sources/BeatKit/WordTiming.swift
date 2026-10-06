@@ -14,8 +14,14 @@ public enum WordTiming {
         let loop = plan.length
         guard title.beat, n > 0, loop > 1.5 else { return [] }
         let period = max(plan.period, 0.2)
-        // The fall onto the beat: quick, but never longer than half a beat.
-        let lead = min(0.2, period * 0.45)
+        // The fall onto the beat: quick, but never longer than half a beat. A pop
+        // takes a little longer to grow, and a reveal longer still to rise.
+        let lead: Double
+        switch title.motion {
+        case .land: lead = min(0.2, period * 0.45)
+        case .pop: lead = min(0.26, period * 0.5)
+        case .reveal: lead = min(0.42, period * 0.85)
+        }
         let beats = plan.beats.filter { $0 > lead && $0 < loop }
         var halves = beats
         for (a, b) in zip(beats, beats.dropFirst()) where b - a < period * 1.5 { halves.append((a + b) / 2) }
@@ -41,7 +47,7 @@ public enum WordTiming {
         // Throughout: the words land once the grid has, and stay.
         let begin = max(plan.intro.end, lead + 0.05)
         guard begin < loop - 1 else { return [] }
-        guard plan.outro.kind == .loop else {
+        guard plan.outro.kind.loops else {
             return lands(from: begin, to: loop - 1).map { WordCue(land: $0, lead: lead) }
         }
         // A loop closes on its first frame, which has no words: they lift off

@@ -9,6 +9,7 @@ import SwiftUI
 struct SongTransport: View {
     let session: BeatSession
     @Bindable var clock: PlaybackClock
+    @AppStorage("previewMuted") private var muted = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -26,6 +27,10 @@ struct SongTransport: View {
                     Text(stamp(clock.duration)).textStyle(.data).foregroundStyle(.secondary)
                 }
                 .fixedSize()
+                IconButton(muted ? "speaker.slash.fill" : "speaker.wave.2.fill", label: muted ? "Sound Off" : "Sound On") {
+                    muted.toggle()
+                }
+                .help(muted ? "Play with the sound on" : "Watch with the sound off, as most Reels first play")
             }
             HStack(spacing: 12) {
                 Text("Clip").textStyle(.label).foregroundStyle(.secondary).frame(width: 52, alignment: .leading)

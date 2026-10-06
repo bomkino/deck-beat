@@ -40,6 +40,7 @@ struct DeckBeatApp: App {
             CheckForUpdatesCommand(updates: updates)
             CommandGroup(after: .toolbar) {
                 AppearanceMenu()
+                SafeAreasToggle()
             }
             BeatCommands()
         }
@@ -56,6 +57,15 @@ struct AppearanceMenu: View {
     }
 }
 
+/// Where a Reel's or Story's own buttons and captions will sit, drawn over the stage.
+struct SafeAreasToggle: View {
+    @AppStorage("showSafeAreas") private var show = false
+    var body: some View {
+        Toggle("Show Safe Areas", isOn: $show)
+            .keyboardShortcut("'", modifiers: [.command, .shift])
+    }
+}
+
 // MARK: - Project
 
 /// The song a project plays: a file in the package, or the demo groove when nil.
@@ -66,7 +76,8 @@ struct SongFile: Codable, Hashable {
 
 /// Everything saved in a Deck Beat project.
 struct BeatProject: Codable, Hashable {
-    static let currentVersion = 2
+    /// 3: Deck Beat 6.0 (builds, voices, collage, Loose, the new endings, pitch.dog type).
+    static let currentVersion = 3
 
     var version = BeatProject.currentVersion
     var slides: [MediaItem] = []
@@ -88,6 +99,9 @@ struct BeatProject: Codable, Hashable {
     var beat = BeatFix.none
     /// Words over the video: a caption or a title card.
     var title: ReelTitle?
+    /// Exports leave the backdrop out where the format can (ProRes 4444, HEVC,
+    /// PNG); the stage shows a checkerboard in its place.
+    var transparent = false
 
     init(backdrop: BackdropSettings, stage: StageLook) {
         self.backdrop = backdrop
@@ -99,8 +113,13 @@ struct BeatProject: Codable, Hashable {
         var p = BeatProject(backdrop: look.backdrop(nil), stage: look.stage)
         p.settings = Looks.settings(look, over: BeatSettings())
         p.gridFollowsDeck = true
+        // New documents start the way the last one was set.
+        p.transparent = UserDefaults.standard.bool(forKey: BeatProject.transparentKey)
         return p
     }
+
+    /// Where the last Background choice is kept, as the start for new documents.
+    static let transparentKey = "background.transparent"
 
     /// Reads any version: whatever the file leaves out, or this version
     /// cannot read, takes its default rather than failing the project.
@@ -124,6 +143,7 @@ struct BeatProject: Codable, Hashable {
         c.update(&gridFollowsDeck, .gridFollowsDeck)
         c.update(&beat, .beat)
         c.update(&title, .title)
+        c.update(&transparent, .transparent)
     }
 }
 
@@ -135,8 +155,13 @@ final class BeatDocument: ReferenceFileDocument, @unchecked Sendable {
 
     @Published var project: BeatProject
     let media = MediaStore()
+    /// The version of Deck Beat's format the file was saved in.
+    private(set) var savedBy = BeatProject.currentVersion
 
     init() { project = .fresh() }
+
+    /// Saved by a newer Deck Beat: what this one can't read would be lost if it saved over it.
+    var fromNewerVersion: Bool { savedBy > BeatProject.currentVersion }
 
     required init(configuration: ReadConfiguration) throws {
         guard let wrappers = configuration.file.fileWrappers,
@@ -144,6 +169,8 @@ final class BeatDocument: ReferenceFileDocument, @unchecked Sendable {
             throw CocoaError(.fileReadCorruptFile)
         }
         project = try JSONDecoder().decode(BeatProject.self, from: json)
+        savedBy = project.version
+        project.version = BeatProject.currentVersion
         if let folder = wrappers[ProjectPackage.mediaFolder]?.fileWrappers {
             for (name, wrapper) in folder {
                 if let data = wrapper.regularFileContents { try? media.write(data, as: name) }
@@ -154,6 +181,12 @@ final class BeatDocument: ReferenceFileDocument, @unchecked Sendable {
     func snapshot(contentType: UTType) throws -> BeatProject { project }
 
     func fileWrapper(snapshot: BeatProject, configuration: WriteConfiguration) throws -> FileWrapper {
+        if fromNewerVersion, configuration.existingFile != nil {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [
+                NSLocalizedDescriptionKey: "This project was made with a newer Deck Beat, so it isn't saved over.",
+                NSLocalizedRecoverySuggestionErrorKey: "Saving here would lose what this version can't read. Choose File › Duplicate to keep your changes in a copy, or update Deck Beat.",
+            ])
+        }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try enc.encode(snapshot)
@@ -209,12 +242,16 @@ struct BeatCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
                 .disabled(session == nil)
             Divider()
+            // The sheet waits for the song and every slide before it exports.
             Button("Export…") { session?.showExport = true }
                 .keyboardShortcut("e", modifiers: [.command])
                 .disabled(session == nil)
         }
+        // Nothing here prints, and ⌘P plays.
+        CommandGroup(replacing: .printItem) {}
         CommandMenu("Beat") {
             Button("Play or Pause") { session?.togglePlay() }
+                .keyboardShortcut("p", modifiers: [.command])
                 .disabled(session == nil)
             Button("Back to the Start") { session?.rewind() }
                 .keyboardShortcut(.leftArrow, modifiers: [.command])
@@ -240,7 +277,8 @@ enum BeatPanels {
         panel.message = "Choose slides: images, PDFs (each page becomes a slide) or clips."
         panel.begin { response in
             guard response == .OK else { return }
-            let urls = panel.urls
+            // In the order Finder lists them by name, so slide 2 comes before slide 10.
+            let urls = panel.urls.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             MainActor.assumeIsolated { session.importSlides(urls) }
         }
     }

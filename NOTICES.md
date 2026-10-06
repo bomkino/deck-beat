@@ -4,11 +4,11 @@ Deck Beat is released under the GNU AGPL 3.0 (see `LICENSE`). Its one package de
 
 ## Type
 
-No fonts are bundled. The interface is set in the system font. Titles set into exported video use faces that ship with macOS (Avenir Next, Helvetica Neue, Didot and Futura), drawn by the operating system at render time.
+The interface is set in the system font. Titles set in **pitch.dog** and **pitch.dog Italic** use PD Head and PD Eyebrow from the [pitch.dog type system](https://github.com/bomkino/pitchdog-type-system) v3.0.0, bundled unchanged in `Resources/Fonts` (in the app, `Contents/Resources/Fonts`). The font files are dedicated to the public domain under CC0 1.0 Universal; their checksums and pitch.dog's CC0 note are kept beside them. The names pitch.dog, PD Head and PD Eyebrow are not covered by CC0 (see `TRADEMARKS.md`). The other title faces ship with macOS (Avenir Next, Helvetica Neue, Didot and Futura) and are drawn by the operating system at render time.
 
 ## Sound
 
-No recordings or samples are bundled. The demo groove a new project opens with is synthesised in code (`Sources/BeatKit/DemoGroove.swift`). Songs you add are decoded with Apple's AVFoundation, part of macOS.
+Four starter songs are bundled in `Resources/Songs`, each dedicated to the public domain under CC0 1.0 Universal by its artist: *Retro Synths*, *Make Funk* and *Machines With Feelings* by HoliznaCC0, and *Roller Fever* by Loyalty Freak Music, all from the Free Music Archive. `docs/SONGS.md` records each one's track page, the licence as stated there, the date it was checked, and the checksums of the source and the bundled file. The demo groove is synthesised in code (`Sources/BeatKit/DemoGroove.swift`). Songs you add are decoded with Apple's AVFoundation, part of macOS.
 
 ## webgl-noise
 

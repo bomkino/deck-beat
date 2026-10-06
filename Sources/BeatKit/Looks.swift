@@ -209,6 +209,43 @@ public enum Looks {
              },
              backdrop: { _ in studio(["#D9D9D6", "#E3E3E0", "#EDEDEB", "#F3F3F1", "#FAFAF8"], brightness: 1, accent: 0.2, detail: 0.4) },
              stage: stage(surface: .print, bloom: 0, grain: 0.05, vignette: 0.08, bend: 0.2, shadow: 0.35, mood: 0.5)),
+
+        // New in 6.0.
+        Look(id: "beat-by-beat", name: "Beat by Beat",
+             summary: "The room starts empty. Each beat puts a slide somewhere new until the board is built on the drop, then every slide answers to its own sound: kicks thump, snares flick, hats glint. At the end they leave on the beat, the cover last.",
+             apply: LookMoves.beatByBeat,
+             backdrop: { _ in studio(["#0C0B0A", "#151311", "#1D1A17", "#28241F", "#36302A"], brightness: 0.95, accent: 0.4) },
+             stage: stage(surface: .satin, bloom: 0.18, grain: 0.07, vignette: 0.3, mood: 0.55)),
+
+        Look(id: "paste-up", name: "Paste-up",
+             summary: "Prints pinned to a paper wall on the song's own hits, a little crooked, each lifting off as the music finds it. At the end they float away.",
+             apply: LookMoves.pasteUp,
+             backdrop: { _ in
+                 var b = BackdropCatalog.style("paper").defaults
+                 b.palette = Palettes.named("linen")
+                 b.brightness = 0.92
+                 b.accent = 0.25
+                 return b
+             },
+             stage: stage(surface: .print, bloom: 0, grain: 0.1, vignette: 0.12, bend: 0.3, shadow: 0.6, mood: 0.3)),
+
+        Look(id: "mosaic", name: "Mosaic",
+             summary: "For fifty slides or more. The wall builds on every hit, rings of light cross it on the kicks, and the camera stops to read one slide every four bars. At the end the rows take a bow.",
+             apply: LookMoves.mosaic,
+             backdrop: { _ in studio(["#05060A", "#0A0C11", "#10131A", "#171B24", "#212633"], brightness: 0.85, accent: 0.25, detail: 0.45) },
+             stage: stage(surface: .original, bloom: 0.2, grain: 0.06, vignette: 0.32, mood: 0.25)),
+
+        Look(id: "afterglow", name: "Afterglow",
+             summary: "Slow and warm, for ballads, late sets and thank-yous. Slides come out of soft focus on the beat and glow long after it; at the end the board drifts away round the cover.",
+             apply: LookMoves.afterglow,
+             backdrop: { deck in
+                 var b = BackdropCatalog.style("softbloom").defaults
+                 b.palette = deck.map(darkened) ?? Palettes.named("ember")
+                 b.brightness = 0.55
+                 b.motion = 0.35
+                 return b
+             },
+             stage: stage(surface: .satin, bloom: 0.35, grain: 0.08, vignette: 0.38, mood: 0.6)),
     ]
 
     /// The deck's colours, pulled down so the backdrop stays behind the slides.
@@ -241,16 +278,23 @@ public enum Atmosphere {
             loud3[i] = sum / Float(min(i + 1, span))
         }
         let smoothed = loud3
+        let outro = plan.outro
         return { t, look, backdrop in
-            guard k > 0.001 else { return }
             let time = t > plan.length + 1e-6 ? wrap(t, plan.length) : max(t, 0)
+            // Drift away: the room dims round the cover as the slides leave.
+            if outro.kind == .driftAway, time > outro.start {
+                let dim = smoothstep(Float(outro.start), Float(min(outro.start + plan.period * 8, plan.length)), Float(time))
+                backdrop.brightness *= 1 - 0.28 * dim
+                look.finish.vignette += 0.1 * dim
+            }
+            guard k > 0.001 else { return }
             let kick = BeatPlan.sample(plan.pulse, time)
             let inhale = plan.inhale(at: time)
             let flash = plan.flash(at: time)
             let l3 = BeatPlan.sample(smoothed, time)
             // The loop's last moments ease back to how it began.
             var settle: Float = 1
-            if plan.outro.kind == .loop {
+            if plan.outro.kind.loops {
                 settle = smoothstep(0, 0.5, Float(time)) * (1 - smoothstep(Float(plan.length - 0.5), Float(plan.length), Float(time)))
             }
             backdrop.brightness *= max(0.2, 1 + (0.12 * kick - 0.2 * inhale) * k * settle)

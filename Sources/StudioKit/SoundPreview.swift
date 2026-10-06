@@ -16,6 +16,11 @@ public final class SoundPreview {
 
     public var isPlaying: Bool { player?.isPlaying ?? false }
 
+    /// Silent while still keeping time, like a Reel autoplaying with the sound off.
+    public var muted = false {
+        didSet { if muted != oldValue { player?.volume = muted ? 0 : 1 } }
+    }
+
     /// Starts the mix at `time` within the loop and repeats it.
     public func play(_ track: AudioTrack, signature: Int, loop: Double, from time: Double) {
         guard track.frames > 0, loop > 0 else { return }
@@ -49,6 +54,7 @@ public final class SoundPreview {
             do { try engine.start() } catch { return }
         }
         player.scheduleBuffer(buffer, at: nil, options: .loops)
+        player.volume = muted ? 0 : 1
         player.play()
         self.signature = signature
         self.loop = loop

@@ -11,6 +11,8 @@ public enum BeatMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case equaliser
     case readThrough
     case lightsOn
+    /// Each slide answers the sound that placed it on the board.
+    case voices
 
     public var id: String { rawValue }
 
@@ -21,6 +23,7 @@ public enum BeatMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .equaliser: return "Equaliser"
         case .readThrough: return "Read-through"
         case .lightsOn: return "Lights On"
+        case .voices: return "Voices"
         }
     }
 
@@ -31,6 +34,7 @@ public enum BeatMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .equaliser: return "Each column is a level meter: bass on the left, cymbals on the right."
         case .readThrough: return "The light reads the deck in order, one slide per beat."
         case .lightsOn: return "Windows in a block of flats after dark. Bass lights the lower floors, hats the roof."
+        case .voices: return "Each slide answers the sound that put it on the board: kick slides thump on the kick, snare slides on the snare, hat slides glint."
         }
     }
 
@@ -41,6 +45,7 @@ public enum BeatMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .equaliser: return "chart.bar.fill"
         case .readThrough: return "text.line.first.and.arrowtriangle.forward"
         case .lightsOn: return "building.2"
+        case .voices: return "waveform"
         }
     }
 }
@@ -118,6 +123,10 @@ public struct Motion: Codable, Hashable, Sendable {
     public var idle: IdleMotion = .breathe
     /// 0…1.
     public var idleAmount: Float = 0.25
+    /// 0 (tight) … 1 (human): take-offs a touch early or late, every card
+    /// overshooting and turning a little differently, curved paths, and each
+    /// card idling at its own pace. Landings stay exactly on the beat.
+    public var feel: Float = 0
 
     public init() {}
 }
@@ -161,6 +170,8 @@ public enum CellShape: String, Codable, CaseIterable, Identifiable, Sendable {
 public enum Margins: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Clear of the app interface on Reels, TikTok and Shorts in a tall frame.
     case safe
+    /// Safe, and in a tall frame also clear of the button column on the right.
+    case clear
     case even
     case bleed
 
@@ -168,16 +179,20 @@ public enum Margins: String, Codable, CaseIterable, Identifiable, Sendable {
     public var title: String {
         switch self {
         case .safe: return "Safe"
+        case .clear: return "Clear"
         case .even: return "Even"
         case .bleed: return "Edge"
         }
     }
 
+    /// Margins that keep a slide held up to be read clear of the platform's interface.
+    public var keepsClear: Bool { self == .safe || self == .clear }
+
     /// Insets as fractions of the canvas: left/right of its width, top and bottom of its height.
     public func insets(aspect: Float) -> (side: Float, top: Float, bottom: Float) {
         switch self {
         // Reels: 60 px at the sides, 220 above and 340 below, at 1080 × 1920.
-        case .safe: return aspect < 0.8 ? (60 / 1080, 220 / 1920, 340 / 1920) : (0.06, 0.08, 0.08)
+        case .safe, .clear: return aspect < 0.8 ? (60 / 1080, 220 / 1920, 340 / 1920) : (0.06, 0.08, 0.08)
         case .even: return aspect < 0.8 ? (0.06, 0.06 * aspect, 0.06 * aspect) : (0.05 / aspect, 0.05, 0.05)
         case .bleed: return (0.012, 0.012 * aspect, 0.012 * aspect)
         }
@@ -234,7 +249,19 @@ public enum SlideOrder: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// How the cells are laid out.
+public enum Arrangement: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// Rows and columns of equal cells.
+    case grid
+    /// Every slide at its own shape, in rows (or columns) that fill the frame.
+    case collage
+
+    public var id: String { rawValue }
+    public var title: String { self == .grid ? "Grid" : "Collage" }
+}
+
 public struct GridSettings: Codable, Hashable, Sendable {
+    public var arrangement: Arrangement = .grid
     public var columns = 3
     public var rows = 5
     /// Pixels at 1080 on the short side, 0…80.
@@ -255,11 +282,16 @@ public struct GridSettings: Codable, Hashable, Sendable {
 
     public static let columnRange = 1...12
     public static let rowRange = 1...20
+    /// The most cells a collage lays out; a bigger deck turns over into them.
+    public static let collageLimit = 100
 }
 
 /// How the cards arrive.
 public enum Entrance: String, Codable, CaseIterable, Identifiable, Sendable {
     case deal, rise, depth, flip, drop, assemble, unfold, blinds, page, weave
+    /// Each slide comes in the way its sound does: a kick falls in with
+    /// weight, a snare snaps in from the side, a hat pops up.
+    case voices
 
     public var id: String { rawValue }
     public var title: String {
@@ -274,6 +306,7 @@ public enum Entrance: String, Codable, CaseIterable, Identifiable, Sendable {
         case .blinds: return "Blinds"
         case .page: return "Page"
         case .weave: return "Weave"
+        case .voices: return "By sound"
         }
     }
     public var summary: String {
@@ -288,6 +321,7 @@ public enum Entrance: String, Codable, CaseIterable, Identifiable, Sendable {
         case .blinds: return "Slats turning face on, top to bottom."
         case .page: return "Laid down like a page, from its left edge."
         case .weave: return "Threads sliding in from both sides and knitting together."
+        case .voices: return "Each slide comes in like the sound that placed it: a kick drops in with weight, a snare snaps in from the side, a hat pops up."
         }
     }
 }
@@ -358,6 +392,9 @@ public enum TurnStyle: String, Codable, CaseIterable, Identifiable, Sendable {
 /// The order cards land in.
 public enum StaggerOrder: String, Codable, CaseIterable, Identifiable, Sendable {
     case centreOut, diagonal, reading, spiral, columns, rows, random
+    /// Each card lands as far as it can from the ones before it, so the
+    /// board fills evenly and never in reading order.
+    case scatter
 
     public var id: String { rawValue }
     public var title: String {
@@ -369,13 +406,45 @@ public enum StaggerOrder: String, Codable, CaseIterable, Identifiable, Sendable 
         case .columns: return "Columns"
         case .rows: return "Rows"
         case .random: return "Random"
+        case .scatter: return "Scattered"
         }
     }
+}
+
+/// How the cards are timed onto the board.
+public enum IntroPace: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// Dealt in quick succession over the opening bars.
+    case together
+    /// The board builds on the beat: the empty room first, then a slide on
+    /// each beat (or bar, or eighth, to suit the deck), the last on the drop.
+    case beats
+    /// The board builds on the song's own hits: kicks, snares and hats.
+    case hits
+
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .together: return "Together"
+        case .beats: return "Beat by beat"
+        case .hits: return "On every hit"
+        }
+    }
+    public var summary: String {
+        switch self {
+        case .together: return "The slides are dealt in quick succession over the opening bars."
+        case .beats: return "It opens on the empty room. Every beat lands a slide, scattered, and the last lands on the drop."
+        case .hits: return "It opens on the empty room. Slides land on the song's own kicks, snares and hats, the last on the drop."
+        }
+    }
+
+    /// The board builds over the opening, on the music.
+    public var builds: Bool { self != .together }
 }
 
 public struct IntroSettings: Codable, Hashable, Sendable {
     /// Frame 0 is the first slide, large and lit: the cover, never black.
     public var coldOpen = true
+    public var pace: IntroPace = .together
     public var entrance: Entrance = .deal
     public var order: StaggerOrder = .centreOut
     /// Bars, or 0 for the fewest of 1, 2 or 4 bars that last at least 1.6 seconds.
@@ -395,6 +464,15 @@ public enum Outro: String, Codable, CaseIterable, Identifiable, Sendable {
     /// The slides go dark one by one; the cover goes last and holds.
     case lightsOut
     case none
+    /// The board empties the way it filled, one slide a beat, back to the
+    /// empty room it opened on, so the clip loops.
+    case leave
+    /// A bow in a wave across the board, then each slide leaves in its own
+    /// time; the cover steps forward and takes the last bow.
+    case curtainCall
+    /// The slides lift away like paper in a draught, slower and slower; the
+    /// room dims round the cover, which stays and glows.
+    case driftAway
 
     public var id: String { rawValue }
     public var title: String {
@@ -404,8 +482,38 @@ public enum Outro: String, Codable, CaseIterable, Identifiable, Sendable {
         case .close: return "Close"
         case .lightsOut: return "Lights out"
         case .none: return "None"
+        case .leave: return "Leave on the beat"
+        case .curtainCall: return "Curtain call"
+        case .driftAway: return "Drift away"
         }
     }
+    public var summary: String {
+        switch self {
+        case .auto: return "A loop for 30 seconds or less, a close for longer clips. A board that builds leaves on the beat, or takes a curtain call."
+        case .loop: return "The cards gather back into the cover, so the last frame meets the first."
+        case .close: return "The cards leave in reverse and the cover rises to hold the end."
+        case .lightsOut: return "The slides go dark one by one; the cover goes last and holds."
+        case .none: return "The music plays to the end of the clip."
+        case .leave: return "The board empties the way it filled, one slide a beat, back to the empty room. It loops."
+        case .curtainCall: return "The slides bow in a wave on the beat, then leave each in its own time. The cover takes the last bow."
+        case .driftAway: return "The slides lift away like paper in a draught, slower and slower. The cover stays and glows."
+        }
+    }
+    public var symbol: String {
+        switch self {
+        case .auto: return "wand.and.stars"
+        case .loop: return "repeat"
+        case .close: return "rectangle.on.rectangle"
+        case .lightsOut: return "lightbulb.slash"
+        case .none: return "stop"
+        case .leave: return "square.grid.3x3.topleft.filled"
+        case .curtainCall: return "theatermasks"
+        case .driftAway: return "wind"
+        }
+    }
+
+    /// The clip runs whole bars and its last frame meets its first.
+    public var loops: Bool { self == .loop || self == .leave }
 }
 
 /// How often one slide steps out of the grid to be read.
@@ -452,6 +560,9 @@ public struct BeatSettings: Codable, Hashable, Sendable {
     public var step: Double = 0
     /// Equaliser columns grow from the middle row instead of the bottom.
     public var fromMiddle = false
+    /// 0 (tidy) … 1 (a paste-up): each card a little turned, off its mark
+    /// and smaller, seeded. A slide held up to be read is always square.
+    public var loose: Float = 0
     public var seed: UInt32 = 1
 
     public init() {}
@@ -529,6 +640,7 @@ extension Motion {
         c.update(&bounce, .bounce)
         c.update(&idle, .idle)
         c.update(&idleAmount, .idleAmount)
+        c.update(&feel, .feel)
     }
 }
 
@@ -546,6 +658,7 @@ extension GridSettings {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init()
+        c.update(&arrangement, .arrangement)
         c.update(&columns, .columns)
         c.update(&rows, .rows)
         c.update(&gap, .gap)
@@ -563,6 +676,7 @@ extension IntroSettings {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init()
         c.update(&coldOpen, .coldOpen)
+        c.update(&pace, .pace)
         c.update(&entrance, .entrance)
         c.update(&order, .order)
         c.update(&bars, .bars)
@@ -592,6 +706,7 @@ extension BeatSettings {
         c.update(&spread, .spread)
         c.update(&step, .step)
         c.update(&fromMiddle, .fromMiddle)
+        c.update(&loose, .loose)
         c.update(&seed, .seed)
     }
 }

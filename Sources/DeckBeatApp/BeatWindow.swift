@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct BeatRoot: View {
     @State private var session: BeatSession
     @Environment(\.undoManager) private var undoManager
+    @Environment(\.documentConfiguration) private var documentConfiguration
     @AppStorage("appearance") private var appearance = AppearanceChoice.dark.rawValue
 
     init(document: BeatDocument) {
@@ -20,6 +21,8 @@ struct BeatRoot: View {
                 session.start()
             }
             .onChange(of: undoManager) { _, um in session.undoManager = um }
+            // Exports are named after the saved document.
+            .onChange(of: documentConfiguration?.fileURL, initial: true) { _, url in session.documentURL = url }
             .preferredColorScheme(AppearanceChoice(rawValue: appearance)?.colorScheme)
             .focusedSceneValue(\.beatSession, session)
             .modifier(BeatSnapshotHost(session: session))
@@ -98,6 +101,7 @@ struct BeatStage: View {
     let session: BeatSession
     let still: CGImage?
     @Environment(\.colorScheme) private var scheme
+    @AppStorage("showSafeAreas") private var showSafeAreas = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -111,7 +115,9 @@ struct BeatStage: View {
                     ? CGSize(width: avail.height * aspect, height: avail.height)
                     : CGSize(width: avail.width, height: avail.width / aspect)
                 let scale = NSScreen.main?.backingScaleFactor ?? 2
-                let k = min(1, 2400 / max(fitted.width, fitted.height) / scale)
+                // Never more pixels than the export has: the stage only shows it.
+                let canvas = CGFloat(max(session.project.format.width, session.project.format.height))
+                let k = min(1, min(2400, canvas) / max(fitted.width, fitted.height) / scale)
                 let px = CGSize(width: (fitted.width * scale * k).rounded(), height: (fitted.height * scale * k).rounded())
                 ZStack {
                     Theme.surround
@@ -132,6 +138,8 @@ struct BeatStage: View {
                         }
                     }
                     .frame(width: fitted.width, height: fitted.height)
+                    // Shown on the stage only, never exported.
+                    .overlay { if showSafeAreas { SafeAreaGuides(format: session.project.format) } }
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.stage, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.stage, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
                     .shadow(color: .black.opacity(scheme == .dark ? 0.55 : 0.18), radius: scheme == .dark ? 28 : 14, y: 4)
@@ -274,15 +282,32 @@ struct SongCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.song?.title ?? (session.songLoading ? "Listening…" : "No song")).textStyle(.label).lineLimit(1)
                     Text(detail).textStyle(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if let starter = session.starterSong {
+                        Text("\(starter.artist) · CC0, free to use").textStyle(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
             }
             HStack(spacing: 6) {
                 Button(session.project.song == nil ? "Choose Song…" : "Replace…") { BeatPanels.chooseSong(session) }
                     .buttonStyle(QuietButtonStyle())
-                if session.project.song != nil {
-                    Button("Demo Groove") { session.useDemoSong() }.buttonStyle(QuietButtonStyle())
+                Menu {
+                    Section("Free to use (CC0)") {
+                        ForEach(StarterSong.all) { s in
+                            Button { session.useStarterSong(s) } label: {
+                                Text(s.title + (session.starterSong == s ? "  ✓" : ""))
+                                Text("\(s.artist) · \(s.mood)")
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("Demo Groove" + (session.project.song == nil ? "  ✓" : "")) { session.useDemoSong() }
+                } label: {
+                    Text("Starter Songs").textStyle(.caption)
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Songs that come with Deck Beat, free to use in anything you make")
             }
             .padding(.leading, -8)
         }
@@ -310,6 +335,10 @@ struct SongCard: View {
 /// throughout, its words landing on the beat if asked. `--drop fan`,
 /// `--feature zoom`, `--turn blinds`, `--entrance page` and `--room 0.8` try
 /// the moves, and `--grid 3x5` sets the grid by hand; `--time drop:0.4` times the still from a moment of the plan.
+/// `--background transparent` leaves the backdrop out (the still shows a checkerboard in its place).
+/// New in 6.0: `--deck mixed` drops in slides of five shapes; `--pace beats|hits`, `--outro curtainCall`,
+/// `--states neon`, `--loose 0.5`, `--margins clear`, `--arrangement collage` and `--feel 0.6` set
+/// the new choices; `--time build:0.5` is halfway through a build and `--time end:-1` a second before the end.
 struct BeatSnapshotHost: ViewModifier {
     let session: BeatSession
     @State private var still: CGImage?
@@ -340,6 +369,8 @@ struct BeatSnapshotHost: ViewModifier {
             return
         }
         if let page = StudioSnapshot.arg("--page") { UserDefaults.standard.set(page, forKey: "inspectorPage") }
+        // Set every run, so a headless run never takes the last document's Background.
+        session.update("Background") { $0.transparent = StudioSnapshot.arg("--background") == "transparent" }
         if let words = StudioSnapshot.arg("--title") {
             let caption = CommandLine.arguments.contains("--caption")
             session.setTitle("Title") { t in
@@ -348,6 +379,11 @@ struct BeatSnapshotHost: ViewModifier {
                 t.placement = caption ? .corner : .centre
                 t.timing = caption ? .throughout : .opening
                 t.beat = CommandLine.arguments.contains("--beat-words")
+                if let face = StudioSnapshot.arg("--face").flatMap(ReelTitle.Face.init(rawValue:)) { t.face = face }
+                if let motion = StudioSnapshot.arg("--words").flatMap(ReelTitle.Motion.init(rawValue:)) {
+                    t.beat = true
+                    t.motion = motion
+                }
             }
         }
         if let id = StudioSnapshot.arg("--look") { session.choose(Looks.look(id)) }
@@ -373,6 +409,13 @@ struct BeatSnapshotHost: ViewModifier {
         if let g = StudioSnapshot.arg("--grid")?.split(separator: "x").compactMap({ Int($0) }), g.count == 2 {
             session.setGrid(columns: g[0], rows: g[1])
         }
+        if let v = StudioSnapshot.arg("--pace").flatMap(IntroPace.init(rawValue:)) { session.setPace(v) }
+        if let v = StudioSnapshot.arg("--outro").flatMap(Outro.init(rawValue:)) { session.update("Ending") { $0.settings.outro = v } }
+        if let v = StudioSnapshot.arg("--states").flatMap(StatePreset.preset) { session.useStates(v) }
+        if let v = StudioSnapshot.arg("--loose").flatMap(Float.init) { session.update("Loose") { $0.settings.loose = v } }
+        if let v = StudioSnapshot.arg("--feel").flatMap(Float.init) { session.update("Feel") { $0.settings.motion.feel = v } }
+        if let v = StudioSnapshot.arg("--margins").flatMap(Margins.init(rawValue:)) { session.update("Margins") { $0.settings.grid.margins = v } }
+        if let v = StudioSnapshot.arg("--arrangement").flatMap(Arrangement.init(rawValue:)) { session.setArrangement(v) }
         if let c = StudioSnapshot.arg("--clip").flatMap(Int.init).flatMap(ClipLength.init(rawValue:)) { session.setClip(c) }
         session.clock.playing = false
         session.clock.time = Self.time(StudioSnapshot.arg("--time"), session: session) ?? 3
@@ -380,11 +423,15 @@ struct BeatSnapshotHost: ViewModifier {
         let f = session.project.format
         if let layout = session.planned(for: f)?.layout {
             let cell = layout.cells[0].size / layout.px
-            print(String(format: "layout: %d slides of %.2f:1 on %d×%d %@ cells, %.0f×%.0f px, %.0f%% of each cropped", session.project.slides.count,
-                         session.slideAspect, layout.columns, layout.rows, layout.shape.rawValue as NSString, cell.x, cell.y, layout.crop * 100))
+            print(String(format: "layout: %d slides of %.2f:1 on %d×%d %@ cells (%@), %.0f×%.0f px, %.0f%% of each cropped", session.project.slides.count,
+                         session.slideAspect, layout.columns, layout.rows, layout.shape.rawValue as NSString,
+                         layout.arrangement.rawValue as NSString, cell.x, cell.y, layout.crop * 100))
         }
+        print("type: \(PDType.status)")
         if let comp = session.composition() {
-            still = try? Exporter().still(comp, at: session.clock.time, width: f.width, height: f.height, samples: 4)
+            // A transparent project shows over a checkerboard, as on the stage.
+            still = try? Exporter().still(comp, at: session.clock.time, width: f.width, height: f.height, samples: 4,
+                                          transparent: comp.transparent, checker: comp.transparent)
         }
         if let path = StudioSnapshot.arg("--still") {
             guard let still else {
@@ -425,23 +472,36 @@ extension BeatSnapshotHost {
         case "swap":
             let first = plan.swaps.flatMap { $0 }.map(\.time).filter { $0 > plan.intro.end }.min()
             return first.map { $0 + after }
+        case "build":
+            let i = plan.intro
+            return i.buildStart + (i.end - i.buildStart) * min(max(after, 0), 1)
+        case "end": return plan.length + after
+        case "outro": return plan.outro.start + after
         case "word":
             guard let title = session.project.title else { return nil }
             let cues = WordTiming.cues(title, plan: plan)
             let i = Int(parts[1]) ?? 0
             return cues.indices.contains(i) ? cues[i].land + 0.03 : nil
+        case "arriving":
+            // Partway into the motion of a group of title words, before it lands.
+            guard let title = session.project.title else { return nil }
+            let cues = WordTiming.cues(title, plan: plan)
+            let i = Int(parts[1]) ?? 0
+            return cues.indices.contains(i) ? cues[i].land - cues[i].lead * 0.4 : nil
         default: return nil
         }
     }
 
-    /// The sample deck drawn at 2576 × 1080 (`wide`) or 1920 × 1080 (`hd`), as PNG files to drop in.
+    /// The sample deck drawn at 2576 × 1080 (`wide`) or 1920 × 1080 (`hd`), or in five shapes from
+    /// wide to tall (`mixed`), as PNG files to drop in.
     static func writeDeck(_ kind: String, count: Int) -> [URL] {
-        let size = kind == "hd" ? (w: 1920, h: 1080) : (w: 2576, h: 1080)
+        let mixed = [(w: 2576, h: 1080), (w: 1920, h: 1080), (w: 1080, h: 1080), (w: 1080, h: 1350), (w: 1920, h: 1080), (w: 1080, h: 1920)]
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("deck-beat-\(kind)-deck", isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return (0..<max(1, count)).compactMap { i in
             let url = dir.appendingPathComponent(String(format: "Slide %02d.png", i + 1))
+            let size = kind == "mixed" ? mixed[i % mixed.count] : kind == "hd" ? (w: 1920, h: 1080) : (w: 2576, h: 1080)
             let rep = NSBitmapImageRep(cgImage: DemoDeck.slide(index: i, width: size.w, height: size.h, number: i + 1))
             guard let data = rep.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil else { return nil }
             return url

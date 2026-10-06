@@ -2,7 +2,7 @@
 
 Your deck, lit up by your music. A native Mac app from [pitch.dog](https://pitch.dog).
 
-Drop in your slides and a song. Deck Beat lays the slides out in a grid, listens to the song (tempo, bars, drops and what each instrument is doing) and lights the slides up in time with it. Then it exports a finished video, 1080×1920 for Reels, TikTok and Shorts by default.
+Drop in your slides and a song. Deck Beat lays the slides out in a grid or a collage, listens to the song (tempo, bars, drops and what each instrument is doing) and lights the slides up in time with it. It can even build the board on the beat, one slide at a time. Then it exports a finished video, 1080×1920 for Reels, TikTok and Shorts by default.
 
 It is built on the same engine as Drift, Galileo Gallery and Backdrop, and it is free and open source under the AGPL.
 
@@ -16,13 +16,13 @@ From 3.0.0 on, Deck Beat updates itself. It checks for a new version once a day,
 
 ## What it does
 
-**Slides.** Drag in images, PDFs (each page becomes a slide) or video clips, or use File › Add Slides (⇧⌘I). Slides of any shape work, including decks made for wide screens such as 1920×1080 and 2576×1080. A Keynote or PowerPoint file gets a pointer to save it as a PDF first. Reorder slides in the sidebar. Star a slide to feature it more often; the first starred slide becomes the cover. A new window opens on a 15-slide sample deck so there is something to play with straight away.
+**Slides.** Drag in images, PDFs (each page becomes a slide) or video clips, or use File › Add Slides (⇧⌘I). Slides of any shape work, including decks made for wide screens such as 1920×1080 and 2576×1080, and a deck of mixed shapes lays itself out as a collage. A Keynote or PowerPoint file gets a pointer to save it as a PDF first. Reorder slides in the sidebar. Star a slide to feature it more often; the first starred slide becomes the cover. A new window opens on a 15-slide sample deck so there is something to play with straight away.
 
-**A song.** Drag in any audio file, or a video whose sound you want (MP3, AAC, WAV, AIFF, MOV, MP4), or use File › Choose Song (⇧⌘O). Deck Beat finds the tempo, the beats, the bars and the drops. Until you add one, a synthesised 34-second demo groove plays.
+**A song.** Drag in any audio file, or a video whose sound you want (MP3, AAC, WAV, AIFF, MOV, MP4), or use File › Choose Song (⇧⌘O). Deck Beat finds the tempo, the beats, the bars and the drops. A new window starts on one of four CC0 starter songs, which you are free to use in anything; the Song card offers the others and a synthesised demo groove. Where each song came from is in [docs/SONGS.md](docs/SONGS.md).
 
 **Fixing the beat.** If Deck Beat hears a song at half or double its real speed, set it to ½× or 2×. *Bars start on beat* moves bar one to the second, third or fourth beat, and *Nudge* slides the whole grid up to 150 ms earlier or later.
 
-**Looks.** Seven starting points, each a complete set of the settings below:
+**Looks.** Eleven starting points, each a complete set of the settings below:
 
 | Look | What it does |
 | --- | --- |
@@ -33,17 +33,24 @@ From 3.0.0 on, Deck Beat updates itself. It checks for a new version once a day,
 | Equaliser | Bass on the left, cymbals on the right. Each column fills to the level of its part of the song. |
 | Gallery Wall | The grid hung on an angled wall above a polished floor, the camera walking up to one slide at a time. For slower songs and quieter work. |
 | Light Box | A pale room for light decks. Resting slides go grey; playing slides come back in colour. |
+| Beat by Beat | The room starts empty. Each beat puts a slide somewhere new until the board is built on the drop, then every slide answers to its own sound. At the end they leave on the beat. |
+| Paste-up | Prints pinned to a paper wall on the song's own hits, a little crooked. At the end they float away. |
+| Mosaic | For fifty slides or more. The wall builds on every hit, rings of light cross it, and the camera reads one slide every four bars. At the end the rows take a bow. |
+| Afterglow | Slow and warm, for ballads and thank-yous. Slides come out of soft focus and glow long after the beat; the board drifts away round the cover. |
 
-**The grid.** Columns (1–12), rows (1–20), gap, corner radius, cell shape (auto, slide, fill or square), margins (*Safe* keeps the grid off a Reel's header and most of its caption, and a featured or zoomed slide clear of the buttons too; *Even* and *Edge* leave even room or almost none), an optional angled wall with a reflection, and slide order. A new project's grid follows the deck: it refits as you add or remove slides, change the canvas or add a caption, until you set its size by hand. The fit picks slide-shaped cells that fill the frame, or filled cells that keep at least 65% of each slide, so 15 slides at 2576×1080 get a 2×8 grid of whole slides in a 1080×1920 Reel. *Auto* keeps a slide whole wherever filling its cell would crop more than 40% of it. With more slides than cells, resting cells turn over on the downbeats so every slide gets seen; with fewer, every slide shows before any shows twice, and repeats are kept apart.
+**The grid.** Columns (1–12), rows (1–20), gap, corner radius, cell shape (auto, slide, fill or square), margins (*Safe* keeps the grid off a Reel's header and most of its caption, and a featured or zoomed slide clear of the buttons too; *Clear* keeps the whole grid clear of the buttons and caption; *Even* and *Edge* leave even room or almost none), an optional angled wall with a reflection, and slide order. A new project's grid follows the deck: it refits as you add or remove slides, change the canvas or add a caption, until you set its size by hand. The fit picks slide-shaped cells that fill the frame, or filled cells that keep at least 65% of each slide, so 15 slides at 2576×1080 get a 2×8 grid of whole slides in a 1080×1920 Reel. *Auto* keeps a slide whole wherever filling its cell would crop more than 40% of it. With more slides than cells, resting cells turn over on the downbeats so every slide gets seen; with fewer, every slide shows before any shows twice, and repeats are kept apart. Sizes go from about 15 slides to 100, with a finer gap for big decks.
 
-**Rest and lit.** Two states, each with its own size, brightness, colour, opacity, lift, tilt, glow, blur, shadow and tint. You set how quickly a slide lights (attack), how long it holds, how long it fades (tail), how much it bounces, and how it idles between beats (still, breathe, float or sway).
+**Collage.** Every slide at its own shape, in rows or columns that fill the frame, with even gaps and nothing cropped: portrait, square, 4:3, 16:9 and 2.39:1 slides together. A new project picks it by itself when its slides come in mixed shapes. *Loose* takes a grid or a collage from tidy to a paste-up, each slide a little turned and off its mark; a slide held up to be read is always square.
 
-**Five ways to light up.**
+**Idle and active.** How a slide looks waiting and how it looks on the beat, each with its own size, brightness, colour, opacity, lift, tilt, glow, blur, shadow and tint. The Slides page opens on eight ready-made pairs, each shown on your cover: Dim to bright, Grey to colour, Soft to sharp, Ghost, Spotlight, Neon, Paper and Pop. You set how quickly a slide lights (attack), how long it holds, how long it fades (tail), how much it bounces, and how it moves between beats (still, breathe, float or sway). *Feel* goes from tight to human: take-offs a touch early or late, each slide overshooting and turning a little differently, and idling at its own pace, while every landing stays on the beat.
+
+**Six ways to light up.**
 - *Pulse:* a few slides on every beat, more on the bar.
 - *Ripple:* rings from the middle on the kick.
 - *Equaliser:* each column a level meter.
 - *Read-through:* the deck in order, one slide per step.
 - *Lights On:* bass lights the lower floors, hats the roof.
+- *Voices:* each slide answers the sound that put it on the board. Kick slides thump on the kick, snare slides on the snare, hat slides glint.
 
 Every mode can *feature* a slide every 1–16 bars, big enough to read and always inside the frame, then back to its own cell. It can *step out* of the grid towards you, or the camera can *zoom in* on it where it hangs, the grid falling away round the edges. The engine keeps it watchable: away from the drops and the intro, no more than 40% of the grid is lit at once.
 
@@ -58,21 +65,31 @@ Tunnel, Fan and Strip come home to the grid on a later downbeat, where the whole
 
 **Turning over.** With more slides than cells, a cell shows its next slide with a *flip*, *blinds* (slats turning top to bottom), a *wipe*, or a *page* laid down from its left edge.
 
-**Intro and ending.** The video opens cold on the cover, never black, and deals the rest of the deck into place in time with the music. You choose the entrance (deal, rise, depth, flip, drop, assemble, unfold, blinds, page or weave), the order (centre out, diagonal, reading, spiral, columns, rows or random) and the length. *Land on the drop* starts the clip so the cover lands on the song's first drop.
+**In and out.** The board comes in one of three ways:
+- *Together:* the video opens cold on the cover, never black, and deals the rest of the deck into place over the opening bars.
+- *Beat by beat:* it opens on the empty room, and every beat lands a slide (a bar down to a sixteenth, to suit the deck), scattered so the picture fills evenly. The cover lands last, on the drop.
+- *On every hit:* the same, on the song's own kicks, snares and hats.
+
+You choose the entrance (deal, rise, depth, flip, drop, assemble, unfold, blinds, page, weave, or *by sound*, where a kick slide drops in with weight, a snare slide snaps in from the side and a hat slide pops up), the order (centre out, diagonal, reading, spiral, columns, rows, random or scattered) and the length. *Land on the drop* starts the clip so the cover lands on the song's first drop.
 
 The ending can be:
-- *Loop:* the last frame meets the first, so the video loops seamlessly.
+- *Loop:* the cards gather back into the cover, so the video loops seamlessly.
 - *Close:* the cards leave and the cover holds.
-- *Lights Out:* the slides go dark one by one.
-- *Auto:* Loop for clips of 30 seconds or less, Close for longer ones.
+- *Lights out:* the slides go dark one by one.
+- *Leave on the beat:* the board empties the way it filled, back to the empty room, and loops.
+- *Curtain call:* the slides bow in a wave, then leave each in their own time; the cover takes the last bow.
+- *Drift away:* the slides lift off like paper in a draught, slower and slower, and the room dims round the cover.
+- *Auto:* a loop for clips of 30 seconds or less, a close for longer ones. A board that builds leaves on the beat or takes a curtain call.
 
-**Titles.** A title and a line above it, such as a date or a client, set large and centred or small in a corner, its lines balanced so it never ends on one stray word. It can open the video, close it like an end card, or stay throughout as a caption, which the grid moves over to make room for. *Words land on the beat* brings the line above in first, then the title a few words at a time, each falling onto a beat; a looping caption lifts them off again in reverse before the loop turns.
+**Titles.** A title and a line above it, such as a date or a client, set in pitch.dog's own type (PD Head for the title, upright or italic, and PD Eyebrow above it) or one of four other faces, large and centred or small in a corner, its lines balanced so it never ends on one stray word. It can open the video, close it like an end card, or stay throughout as a caption, which the grid moves over to make room for. *Words on the beat* brings the line above in first, then the title a few words at a time, each on a beat. They can *land*, *pop* (growing in with a small overshoot) or *reveal* (rising from behind their own line). A looping caption lifts them off again in reverse before the loop turns.
 
-**The room.** Eighteen Backdrop styles behind the grid, in your palette or in colours taken from your slides. *Slide colour* lets the room take on the colours of the slides in view, so it warms or cools as a slide comes forward. *Atmosphere* lets the room answer the song: the backdrop lifts on the kick, the light flares on a drop. *Finish* sets the cards' surface (original, print, satin or gloss), bloom, grain, vignette, shadows and motion blur.
+**The room.** Thirty-five Backdrop styles in eight families behind the grid, in your palette or in colours taken from your slides, or a *Transparent* background for laying the video over other footage. *Slide colour* lets the room take on the colours of the slides in view, so it warms or cools as a slide comes forward. *Atmosphere* lets the room answer the song: the backdrop lifts on the kick, the light flares on a drop. *Finish* sets the cards' surface (original, print, satin or gloss), bloom, grain, vignette, shadows and motion blur.
 
-**A transport that knows the song.** The clip's waveform, beat and bar marks, bar numbers, drops, and the moments a slide steps forward, with the whole song below and the clip as a bracket you can drag along it. *Best Part* moves the clip to the strongest stretch of the song. Clips run 15, 30, 60 or 90 seconds, or the whole song.
+**A transport that knows the song.** The clip's waveform, beat and bar marks, bar numbers, drops, and the moments a slide steps forward, with the whole song below and the clip as a bracket you can drag along it. *Best Part* moves the clip to the strongest stretch of the song. Clips run 15, 30, 60 or 90 seconds, or the whole song. The speaker switch mutes the preview, to see it the way most Reels first play.
 
-**Export (⌘E).** MP4 (H.264), HEVC, ProRes 422 HQ, ProRes 4444, PNG frames or a still. In any of the frames the toolbar offers (Reel 1080×1920, portrait 1080×1350, square, landscape 1920×1080, cinema and 4K), at 24, 25, 30 or 60 fps, with motion blur and the song's sound. The preview and the export come from the same renderer, so what you see is what you get.
+**Safe areas.** View › Show Safe Areas (⇧⌘') draws where a Reel's buttons and caption will sit.
+
+**Export (⌘E).** MP4 (H.264), HEVC, ProRes 422 HQ, ProRes 4444, PNG frames or a still. With a transparent background, HEVC and ProRes 4444 carry alpha and PNGs keep it, shadows included, the way Drift exports. In any of the frames the toolbar offers (Reel 1080×1920, portrait 1080×1350, square, landscape 1920×1080, cinema and 4K), at 24, 25, 30 or 60 fps, with motion blur and the song's sound. The preview and the export come from the same renderer, so what you see is what you get.
 
 **New Variation (⇧⌘R)** re-rolls the seed. One seed drives every random choice, so the same seed always makes the same video.
 
@@ -92,13 +109,13 @@ During development you can also run `swift run DeckBeat` (it has no updater, sin
 ```sh
 swift run -c release beat-lab check                  # song analysis, layout, plans and every scene, on the CPU
 swift run -c release beat-lab bench                  # how long listening and planning take
-swift run -c release beat-lab render --out lab       # contact sheets of every Look, of wide decks and of the 3.0 moves,
+swift run -c release beat-lab render --out lab       # contact sheets of every Look, of wide decks and of the moves,
                                                      # a 15 s demo clip with sound, and export timings
 bash scripts/verify.sh                               # all of the above, plus headless stills of every Look
 bash scripts/test-updates.sh                         # an older copy updates itself from a local feed, with a throwaway key
 ```
 
-The `verify` workflow runs `beat-lab check`, `bench` and `render` on every push, opens the app on decks of 2576×1080 and 1920×1080 slides to capture each drop move, a zoom, blinds and words on the beat in a 1080×1920 Reel, proves an update end to end, and keeps the renders and captures as an artifact.
+The `verify` workflow runs `beat-lab check`, `bench` and `render` on every push, opens the app on decks of 2576×1080, 1920×1080 and mixed slides to capture each drop move, a zoom, the builds, the endings, a collage and titles in a 1080×1920 Reel, proves an update end to end, and keeps the renders and captures as an artifact.
 
 The app can also render a still without opening a window, which is how `verify.sh` checks the Looks:
 
@@ -107,7 +124,11 @@ The app can also render a still without opening a window, which is how `verify.s
 "../dist/Deck Beat.app/Contents/MacOS/DeckBeat" --still fan.png --deck wide --slides 20 --format reel --drop fan --time drop:0.9
 ```
 
-`--deck wide|hd` drops in a sample deck of 2576×1080 or 1920×1080 slides. `--drop`, `--feature`, `--turn`, `--entrance`, `--room` and `--beat-words` try the moves, and `--time` takes seconds or a moment of the plan: `drop:0.4`, `home:0.2`, `feature:0.3`, `swap:0` or `word:1`.
+```sh
+"../dist/Deck Beat.app/Contents/MacOS/DeckBeat" --still build.png --look beat-by-beat --deck wide --slides 30 --time build:0.5
+```
+
+`--deck wide|hd|mixed` drops in a sample deck of 2576×1080, 1920×1080 or mixed slides. `--drop`, `--feature`, `--turn`, `--entrance`, `--pace`, `--outro`, `--mode`, `--states`, `--feel`, `--loose`, `--arrangement`, `--margins`, `--room`, `--background`, `--face`, `--words` and `--beat-words` try the choices, and `--time` takes seconds or a moment of the plan: `drop:0.4`, `home:0.2`, `feature:0.3`, `swap:0`, `word:1`, `build:0.5`, `outro:0.3` or `end:-0.1`.
 
 ## Releases
 
@@ -121,20 +142,21 @@ Releases are published from `main` by the `release` workflow (Actions › releas
 | `BackdropKit` | the Backdrop engine: generative, loopable backgrounds in Metal |
 | `StageKit` | the shared stage: cards in 3D, scenes, export |
 | `StudioKit` | the shared design language, controls, inspector and export sheet |
-| `BeatKit` | listening to the song (`Analysis.swift`), the grid (`Layout.swift`), the choreography (`Plan.swift`), the scene (`BeatScene.swift`), shapes and pieces for the drops and turns (`Moves.swift`), words on the beat (`WordTiming.swift`), the Looks and the demo deck and groove |
+| `BeatKit` | listening to the song (`Analysis.swift`), the grid and the collage (`Layout.swift`), the choreography (`Plan.swift`), the scene (`BeatScene.swift`), shapes and pieces for the drops and turns (`Moves.swift`), words on the beat (`WordTiming.swift`), idle and active pairs (`Presets.swift`), the Looks and the demo deck and groove |
 | `Updates` | in-app updates from the GitHub releases, through Sparkle |
 | `DeckBeatApp` | the app |
 | `DeckBeatLab` | `beat-lab`, the headless checks and renders |
 
-A Deck Beat project (`.deckbeat`) is a package holding `project.json` and a `Media` folder with the slides and the song.
+A Deck Beat project (`.deckbeat`) is a package holding `project.json` and a `Media` folder with the slides and the song. The fonts and starter songs the app carries are in `Resources`.
 
 The choreography is planned once per clip, ahead of time, as a list of light triggers per cell. So playback, scrubbing and export are pure functions of time, and a loop's last frame meets its first exactly.
 
 ## Next
 
+- Covers exported with the video: the first frame and the finished board as PNGs.
+- An end card that lands on the last bars, and short lines of text revealed one phrase at a time.
+- Song sections and camera shots that change with them.
 - Tap tempo, for songs with no clear beat.
-- A muted preview, since most reels autoplay without sound.
-- Covers exported with the video: frame 0 and the fully lit grid as PNGs.
 - The top three Best Part choices, not just the first.
 
 ## Licence

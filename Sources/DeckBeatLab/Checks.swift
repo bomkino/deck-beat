@@ -556,6 +556,318 @@ enum Checks {
         }
         check("small decks", smallOK, smallOK ? "20 on 3×7, 13, 8 and 4 on 3×5, 2 on 2×3: every slide shows, repeats spread" : smallDetail.joined(separator: "; "))
 
+        // v6 ---------------------------------------------------------------
+
+        func dist(_ p: SIMD2<Float>, _ q: SIMD2<Float>) -> Float { let d = p - q; return (d * d).sum().squareRoot() }
+        var bbb = BeatSettings()
+        LookMoves.beatByBeat(&bbb)
+
+        // Beat by Beat opens on the empty room and lands a slide on every slot after the first
+        // beat, on the beat grid, scattered, never in reading order, the cover alone and last on the drop.
+        var buildBad: [String] = [], buildDetail: [String] = []
+        for slides in [8, 15, 30, 60] {
+            var b = bbb
+            b.grid = GridSettings().fitted(count: slides, aspect: tall, slideAspect: 16.0 / 9.0)
+            let layout = GridLayout(settings: b.grid, aspect: tall, slideAspect: 16.0 / 9.0)
+            let p = Choreographer.plan(a, settings: b, layout: layout, slides: slides, clipStart: 0, clipLength: 30)
+            let i = p.intro
+            let x0 = p.beatPosition(at: i.buildStart)
+            let onGrid = i.step > 0 && i.landings.allSatisfy { t in
+                let k = (p.beatPosition(at: t) - x0) / i.step
+                return abs(k - k.rounded()) < 0.02 && k.rounded() >= 1
+            }
+            let coverLast = i.landings.indices.allSatisfy { $0 == i.coverCell || i.landings[$0] < i.landings[i.coverCell] - 1e-6 }
+            let order = i.order.filter { $0 != i.coverCell }
+            let diagonal = (layout.gridSize * layout.gridSize).sum().squareRoot()
+            let hops = zip(order, order.dropFirst()).map { dist(layout.cells[$0].centre, layout.cells[$1].centre) / diagonal }
+            let hop = hops.reduce(0, +) / Float(max(hops.count, 1))
+            let scene = BeatScene(plan: p, layout: layout, settings: b)
+            let empty = scene.frame(at: 0, context(slides, aspect: tall)).cards.isEmpty
+            let full = scene.frame(at: i.end + 0.01, context(slides, aspect: tall)).cards.count >= p.cells
+            if !(abs(i.end - dropAt) < 0.06 && onGrid && coverLast && order != order.sorted() && hop >= 0.3 && empty && full) {
+                buildBad.append("\(slides): end \(i.end) grid \(onGrid) cover \(coverLast) hop \(hop) empty \(empty) full \(full)")
+            }
+            buildDetail.append(String(format: "%d on %@ beats", slides, i.step >= 1 ? "\(Int(i.step))" : (i.step == 0.5 ? "½" : "¼")))
+        }
+        check("build on the beat", buildBad.isEmpty, buildBad.isEmpty
+              ? "the empty room, then \(buildDetail.joined(separator: ", ")), scattered, the cover on the drop at \(String(format: "%.2f", dropAt)) s"
+              : buildBad.joined(separator: "; "))
+
+        // On every hit: the slides land on the song's own onsets (or the beat grid where there
+        // are too few), never two within a sixteenth.
+        do {
+            var h = bbb
+            h.intro.pace = .hits
+            let p = Choreographer.plan(a, settings: h, layout: grid, slides: 15, clipStart: 0, clipLength: 30)
+            let onsetTimes = a.onsets(from: 0, to: 30).map(\.time)
+            let times = Set(p.intro.landings.map { ($0 * 1000).rounded() / 1000 }).sorted()
+            let onHits = p.intro.landings.filter { t in onsetTimes.contains { abs($0 - t) < 0.002 } }.count
+            let apart = zip(times, times.dropFirst()).allSatisfy { $1 - $0 >= p.period / 4 * 0.85 }
+            check("build on every hit", onHits >= p.cells - 1 && apart,
+                  "\(onHits) of \(p.cells) slides land on a hit, none within a sixteenth of another")
+        }
+
+        // Voices: after the build, each light on a slide comes with a sound in its own voice.
+        do {
+            let p = Choreographer.plan(a, settings: bbb, layout: grid, slides: 15, clipStart: 0, clipLength: 30)
+            let onsets = a.onsets(from: 0, to: 30)
+            var total = 0, answered = 0
+            for c in 0..<p.cells {
+                for g in p.triggers[c] where g.time > p.intro.end + p.period && g.time < p.outro.start - 0.01
+                    && !p.drops.contains(where: { abs(g.time - $0) < p.period * 2 }) {
+                    total += 1
+                    if onsets.contains(where: { abs($0.time - g.time) < 0.002 && $0.register == p.intro.voices[c] }) { answered += 1 }
+                }
+            }
+            let mix = Register.allCases.map { r in p.intro.voices.filter { $0 == r }.count }
+            check("voices answer", total > 20 && answered == total,
+                  "\(answered) of \(total) lights answer their slide's own sound; voices \(mix[0]) low, \(mix[1]) mid, \(mix[2]) high")
+        }
+
+        // Restraint holds while the slides answer their voices, after a build.
+        do {
+            let p = Choreographer.plan(a, settings: bbb, layout: grid, slides: 15, clipStart: 0, clipLength: 30)
+            var peak: Float = 0
+            var t = p.intro.end + p.period
+            while t < p.outro.start {
+                if !p.drops.contains(where: { t > $0 - p.period && t < $0 + 4 * p.period }),
+                   !p.features.contains(where: { t >= $0.liftOff && t <= $0.end }) {
+                    var lit = 0
+                    for c in 0..<p.cells where p.light(cell: c, at: t).level > 0.5 { lit += 1 }
+                    peak = max(peak, Float(lit) / Float(p.cells))
+                }
+                t += 1.0 / 30
+            }
+            let cap = Float(max(1, Int(Float(p.cells) * 0.4))) / Float(p.cells)
+            check("restraint after a build", peak <= cap + 1e-4, String(format: "peak %.2f of the grid lit", peak))
+        }
+
+        // Leave on the beat: the clip starts and ends on the empty room, so it loops; the board
+        // is whole just before it starts to empty.
+        do {
+            let p = Choreographer.plan(a, settings: bbb, layout: grid, slides: 15, clipStart: 0, clipLength: 32)
+            let scene = BeatScene(plan: p, layout: grid, settings: bbb)
+            let ctx = context(15, aspect: tall)
+            let first = scene.frame(at: 0, ctx).cards.count, last = scene.frame(at: p.length - 1.0 / 240, ctx).cards.count
+            let whole = scene.frame(at: p.outro.start, ctx).cards.count
+            let lastOut = p.outro.leaves.filter { $0 < p.length }.max() ?? 0
+            check("leave loops", p.outro.kind == .leave && first == 0 && last == 0 && whole >= p.cells,
+                  String(format: "%d cards at 0 and %d at the end; all %d at %.2f s; the cover leaves at %.2f s of %.2f",
+                         first, last, whole, p.outro.start, lastOut, p.length))
+        }
+
+        // Curtain call and Drift away end on the cover alone, square, still and inside the frame.
+        var endBad: [String] = []
+        for outro in [Outro.curtainCall, .driftAway] {
+            for slides in [15, 30] {
+                var e = bbb
+                e.outro = outro
+                e.grid = GridSettings().fitted(count: slides, aspect: tall, slideAspect: 16.0 / 9.0)
+                let layout = GridLayout(settings: e.grid, aspect: tall, slideAspect: 16.0 / 9.0)
+                let p = Choreographer.plan(a, settings: e, layout: layout, slides: slides, clipStart: 0, clipLength: 30)
+                let scene = BeatScene(plan: p, layout: layout, settings: e)
+                let ctx = context(slides, aspect: tall)
+                let end = scene.frame(at: p.length - 1.0 / 240, ctx).cards
+                let still = scene.frame(at: p.length - 1.0 / 30, ctx).cards
+                guard end.count == 1, let c = end.first, c.occurrence == p.intro.coverCell else {
+                    endBad.append("\(outro.rawValue) \(slides): \(end.count) cards at the end")
+                    continue
+                }
+                let k = BeatScene.seen(c.position.z)
+                let inside = abs(c.position.x * k) + c.size.x * k / 2 <= tall / 2 + 1e-3 && abs(c.position.y * k) + c.size.y * k / 2 <= 0.5 + 1e-3
+                let square = abs(c.rotation.x) + abs(c.rotation.y) + abs(c.rotation.z) < 1e-3
+                let moved = still.first.map { dist(SIMD2($0.position.x, $0.position.y), SIMD2(c.position.x, c.position.y)) } ?? 1
+                if !inside || !square || (outro == .curtainCall && moved > 1e-4) {
+                    endBad.append("\(outro.rawValue) \(slides): inside \(inside) square \(square) moved \(moved)")
+                }
+            }
+        }
+        check("endings", endBad.isEmpty, endBad.isEmpty ? "Curtain call and Drift away end on the cover, square and inside the frame" : endBad.joined(separator: "; "))
+
+        // Collage: a deck of mixed shapes lays out whole, each slide at its own shape, without
+        // overlaps, inside the box, covering at least 55 % of it, in a Reel, a square and a landscape frame.
+        let mixed: [Float] = [16.0 / 9.0, 4.0 / 3.0, 1, 9.0 / 16.0, wide, 3.0 / 4.0, 16.0 / 9.0, 1.5, 4.0 / 5.0, 16.0 / 9.0, 1, 21.0 / 9.0,
+                              2.0 / 3.0, 16.0 / 9.0, 4.0 / 3.0]
+        var collageBad: [String] = [], collageDetail: [String] = []
+        for (name, canvas) in [("reel", tall), ("square", Float(1)), ("landscape", Float(16.0 / 9.0))] {
+            for n in [5, 9, 15] {
+                let aspects = Array(mixed.prefix(n))
+                let g = GridSettings().fitted(count: n, aspect: canvas, slideAspect: 16.0 / 9.0, aspects: aspects)
+                let l = GridLayout(settings: g, aspect: canvas, slideAspect: 16.0 / 9.0, aspects: aspects)
+                let shapes = l.cells.allSatisfy { abs($0.size.x / $0.size.y / aspects[$0.index] - 1) < 0.01 }
+                var overlaps = 0
+                for i in l.cells.indices {
+                    for j in l.cells.indices where j > i {
+                        let p = l.cells[i], q = l.cells[j]
+                        if abs(p.centre.x - q.centre.x) < (p.size.x + q.size.x) / 2 - 1e-5, abs(p.centre.y - q.centre.y) < (p.size.y + q.size.y) / 2 - 1e-5 { overlaps += 1 }
+                    }
+                }
+                let inside = l.cells.allSatisfy { abs($0.centre.x) + $0.size.x / 2 <= l.safeSize.x / 2 + 1e-4 && abs($0.centre.y) + $0.size.y / 2 <= l.safeSize.y / 2 + 1e-4 }
+                if g.arrangement != .collage || l.count != n || !shapes || overlaps > 0 || !inside || l.coverage < 0.55 {
+                    collageBad.append("\(name) \(n): \(g.arrangement.rawValue) shapes \(shapes) overlaps \(overlaps) inside \(inside) cover \(l.coverage)")
+                }
+                if n == 15 { collageDetail.append("\(name) \(l.rows)×\(l.columns) \(Int(l.coverage * 100))%") }
+            }
+        }
+        let same = GridSettings().fitted(count: 15, aspect: tall, slideAspect: 16.0 / 9.0, aspects: [Float](repeating: 16.0 / 9.0, count: 15))
+        if same.arrangement != .grid { collageBad.append("a deck of one shape became a collage") }
+        check("collage", collageBad.isEmpty, collageBad.isEmpty ? "15 mixed slides whole: \(collageDetail.joined(separator: ", ")); one shape keeps its grid" : collageBad.joined(separator: "; "))
+
+        // Every mode, ending and drop on a collage, building or dealt: no broken cards.
+        do {
+            let aspects = mixed
+            var g = GridSettings().fitted(count: 15, aspect: tall, slideAspect: 16.0 / 9.0, aspects: aspects)
+            g.order = .reading
+            let layout = GridLayout(settings: g, aspect: tall, slideAspect: 16.0 / 9.0, aspects: aspects)
+            let ctx = SceneContext(items: aspects.enumerated().map { SceneItem(media: $0.offset, occurrence: $0.offset, aspect: $0.element) },
+                                   aspect: tall, dials: SceneDials())
+            var bad = 0, clips = 0
+            for mode in BeatMode.allCases {
+                for (outro, move) in [(Outro.leave, DropMove.tunnel), (.curtainCall, .fan), (.driftAway, .strip), (.loop, .weave), (.close, .light)] {
+                    var c = bbb
+                    c.grid = g
+                    c.mode = mode
+                    c.outro = outro
+                    c.dropMove = move
+                    c.feature = .twoBars
+                    c.loose = 0.5
+                    c.intro.pace = mode == .equaliser ? .together : .beats
+                    let p = Choreographer.plan(a, settings: c, layout: layout, slides: 15, clipStart: 0, clipLength: 30)
+                    let scene = BeatScene(plan: p, layout: layout, settings: c)
+                    clips += 1
+                    var t = 0.0
+                    while t <= 30 {
+                        for card in scene.frame(at: t, ctx).cards where !sound(card, slides: 15) { bad += 1 }
+                        t += 1.0 / 15
+                    }
+                }
+            }
+            check("collage poses", bad == 0, "\(bad) broken cards across \(clips) collage clips at 15 fps")
+        }
+
+        // Fifty slides or more: the fitted grid shows every slide with less than a row spare, up to 12 across.
+        var bigFits: [String] = [], bigBad = 0
+        for (name, shape) in [("2576", wide), ("1920", Float(16.0 / 9.0))] {
+            for n in [50, 60, 100, 150] {
+                let g = GridSettings().fitted(count: n, aspect: tall, slideAspect: shape)
+                let l = GridLayout(settings: g, aspect: tall, slideAspect: shape)
+                let inside = l.cells.allSatisfy { abs($0.centre.x) + $0.size.x / 2 <= l.safeSize.x / 2 + 1e-4 && abs($0.centre.y) + $0.size.y / 2 <= l.safeSize.y / 2 + 1e-4 }
+                if l.count < n || l.count - n >= l.columns || !inside { bigBad += 1 }
+                if n == 60 || n == 100 { bigFits.append("\(name) \(n): \(l.columns)×\(l.rows) gap \(Int(g.gap))") }
+            }
+        }
+        check("fit 50 to 150", bigBad == 0, bigFits.joined(separator: ", "))
+
+        // Loose: cards stay in the frame; a slide held up to be read is square and flat.
+        do {
+            var l = bbb
+            l.loose = 1
+            l.feature = .twoBars
+            l.featureStyle = .lift
+            l.outro = .loop
+            let p = Choreographer.plan(a, settings: l, layout: grid, slides: 15, clipStart: 0, clipLength: 60)
+            let scene = BeatScene(plan: p, layout: grid, settings: l)
+            let ctx = context(15, aspect: tall)
+            var out = 0, tilted = 0, held = 0
+            var t = p.intro.end + 0.3
+            while t < p.outro.start {
+                for c in scene.frame(at: t, ctx).cards {
+                    let r = abs(c.rotation.z)
+                    let w = (c.size.x * cosf(r) + c.size.y * sinf(r)) / 2, h = (c.size.x * sinf(r) + c.size.y * cosf(r)) / 2
+                    if abs(c.position.x) + w > tall / 2 + 1e-3 || abs(c.position.y) + h > 0.5 + 1e-3 { out += 1 }
+                }
+                t += 1.0 / 15
+            }
+            for f in p.features {
+                for c in scene.frame(at: f.land + (f.leave - f.land) / 2, ctx).cards where c.layer >= 10 {
+                    held += 1
+                    if abs(c.rotation.x) + abs(c.rotation.y) + abs(c.rotation.z) > 1e-3 { tilted += 1 }
+                }
+            }
+            check("loose", out == 0 && tilted == 0 && held > 0, "\(out) cards out of frame; \(held) slides held up to read, \(tilted) of them turned")
+        }
+
+        // Idle and active presets each set both states, and active is the stronger.
+        let presetsOK = StatePreset.all.allSatisfy { pr in
+            var s = BeatSettings()
+            pr.apply(&s)
+            return pr.matches(s) && pr.active.brightness >= pr.idle.brightness && pr.active.scale > pr.idle.scale
+        } && Set(StatePreset.all.map(\.id)).count == StatePreset.all.count
+        check("presets", presetsOK, "\(StatePreset.all.count) idle and active pairs: \(StatePreset.all.map(\.name).joined(separator: ", "))")
+
+        // Projects from 3.0 open in 6.0 as they were: a deal, tight, tidy, on a grid; the new
+        // choices survive a round trip.
+        do {
+            let json = #"{"mode":"pulse","intro":{"coldOpen":true,"entrance":"deal","order":"centreOut","bars":0},"motion":{"attack":0.05,"bounce":0.08},"grid":{"columns":3,"rows":5,"margins":"safe"},"outro":"auto"}"#
+            let old = try? decoder.decode(BeatSettings.self, from: Data(json.utf8))
+            var v6 = bbb
+            v6.grid.arrangement = .collage
+            v6.grid.margins = .clear
+            v6.loose = 0.4
+            let again = (try? JSONEncoder().encode(v6)).flatMap { try? decoder.decode(BeatSettings.self, from: $0) }
+            let p = Choreographer.plan(a, settings: old ?? BeatSettings(), layout: grid, slides: 15, clipStart: 0, clipLength: 30)
+            let dealt = p.intro.pace == .together && p.intro.flights.allSatisfy { $0 == p.intro.flight }
+            check("old projects 6.0", old?.intro.pace == .together && old?.motion.feel == 0 && old?.loose == 0 && old?.grid.arrangement == .grid
+                  && again == v6 && dealt && p.outro.kind == .loop,
+                  "3.0 settings read as a deal, tight and tidy on a grid, ending in a loop; a round trip keeps the 6.0 choices")
+        }
+
+        // Pop and Reveal: every group arrives on its own beat, full size and home exactly on it,
+        // a pop overshooting a little on the way; none shows on a loop's first or last frame,
+        // after a loop or a leave alike. A saved title keeps its face; a new one is set in pitch.dog type.
+        do {
+            var motionBad: [String] = [], landings = 0, overshoot: Float = 0
+            for motion in [ReelTitle.Motion.pop, .reveal] {
+                for timing in ReelTitle.Timing.allCases {
+                    for outro in [Outro.loop, .leave, .close] {
+                        var m = BeatSettings()
+                        m.outro = outro
+                        let p = Choreographer.plan(a, settings: m, layout: grid, slides: 15, clipStart: 0, clipLength: 30)
+                        var title = headline
+                        title.timing = timing
+                        title.motion = motion
+                        let cues = WordTiming.cues(title, plan: p)
+                        let name = "\(motion.rawValue) \(timing.rawValue) \(outro.rawValue)"
+                        guard cues.count == title.beatGroups else { motionBad.append("\(name): \(cues.count) cues"); continue }
+                        for (i, c) in cues.enumerated() {
+                            landings += 1
+                            let before = c.land - c.lead - 1e-4
+                            switch motion {
+                            case .pop:
+                                let home = c.pop(at: c.land), gone = c.pop(at: before)
+                                let peak = stride(from: c.land - c.lead, through: c.land, by: c.lead / 40).map { c.pop(at: $0).scale }.max() ?? 0
+                                overshoot = max(overshoot, peak - 1)
+                                if abs(home.scale - 1) > 0.002 || home.alpha < 0.999 || gone.alpha > 0 || peak > 1.06 || peak < 1.01 {
+                                    motionBad.append(String(format: "%@ %d: home %.3f, peak %.3f", name as NSString, i, home.scale, peak))
+                                }
+                            default:
+                                let path = stride(from: before, through: c.land, by: c.lead / 40).map { c.reveal(at: $0) }
+                                let falls = zip(path, path.dropFirst()).allSatisfy { $1 <= $0 + 1e-6 }
+                                if c.reveal(at: c.land) > 0.001 || c.reveal(at: before) < 0.999 || !falls {
+                                    motionBad.append("\(name) \(i): reveal \(c.reveal(at: c.land)) on its beat")
+                                }
+                            }
+                        }
+                        if timing == .throughout, p.outro.kind.loops {
+                            let edges = [0, p.length - 1.0 / 240]
+                            let seen = cues.flatMap { c in edges.map { motion == .pop ? c.pop(at: $0).alpha : (c.reveal(at: $0) < 0.999 ? 1 : 0) } }
+                            if (seen.max() ?? 0) > 0.001 { motionBad.append("\(name): words at the seam") }
+                        }
+                    }
+                }
+            }
+            let saved = #"{"text":"Hello","kicker":"","placement":"centre","timing":"opening","ink":"auto","face":"grotesk","beat":true}"#
+            let old = try? decoder.decode(ReelTitle.self, from: Data(saved.utf8))
+            let bare = try? decoder.decode(ReelTitle.self, from: Data(#"{"text":"Hello"}"#.utf8))
+            var italic = ReelTitle(text: "Hello", beat: true, motion: .reveal)
+            italic.face = .pitchdogItalic
+            let again = (try? JSONEncoder().encode(italic)).flatMap { try? decoder.decode(ReelTitle.self, from: $0) }
+            let faces = old?.face == .grotesk && old?.motion == .land && bare?.face == .modern && ReelTitle().face == .pitchdog && again == italic
+            check("words pop and reveal", motionBad.isEmpty && faces, motionBad.isEmpty && faces
+                  ? String(format: "%d landings, home on the beat, a pop at most %.1f%% over; saved titles keep their face, new ones are pitch.dog", landings, overshoot * 100)
+                  : (motionBad.prefix(4) + (faces ? [] : ["faces: \(String(describing: old?.face)) \(String(describing: bare?.face))"])).joined(separator: "; "))
+        }
+
         return failures
     }
 

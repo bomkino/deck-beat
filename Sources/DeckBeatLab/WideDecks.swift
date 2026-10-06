@@ -168,5 +168,23 @@ enum Bench {
             }
             print(line)
         }
+        // Mosaic on 60 and 100 slides of mixed shapes, laid out as a collage and built on every hit.
+        let shapes: [Float] = [16.0 / 9.0, 4.0 / 3.0, 1, 9.0 / 16.0, 2576.0 / 1080.0, 3.0 / 4.0, 1.5, 4.0 / 5.0, 21.0 / 9.0, 2.0 / 3.0]
+        for n in [60, 100] {
+            let aspects = (0..<n).map { shapes[$0 % shapes.count] }
+            var s = BeatSettings()
+            LookMoves.mosaic(&s)
+            s.grid = GridSettings().fitted(count: n, aspect: tall, slideAspect: 16.0 / 9.0, aspects: aspects)
+            var layout: GridLayout!
+            let lay = ms { layout = GridLayout(settings: s.grid, aspect: tall, slideAspect: 16.0 / 9.0, aspects: aspects) }
+            var plan: BeatPlan!
+            let t = ms { plan = Choreographer.plan(a, settings: s, layout: layout, slides: n, clipStart: 20, clipLength: 30) }
+            let scene = BeatScene(plan: plan, layout: layout, settings: s)
+            let ctx = SceneContext(items: aspects.enumerated().map { SceneItem(media: $0.offset, occurrence: $0.offset, aspect: $0.element) },
+                                   aspect: tall, dials: SceneDials())
+            let frames = ms { var t = 0.0; while t < 30 { _ = scene.frame(at: t, ctx); t += 1.0 / 30 } } / 900
+            print(String(format: "Mosaic, %d mixed slides as a %@ of %d: layout %.1f ms, plan %.1f ms (frame %.3f ms)",
+                         n, s.grid.arrangement.title as NSString, layout.count, lay, t, frames))
+        }
     }
 }

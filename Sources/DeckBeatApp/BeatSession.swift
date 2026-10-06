@@ -45,6 +45,24 @@ final class BeatSession: StageSource {
     @ObservationIgnored private var plannedMemo: [Float: (version: Int, planned: Planned)] = [:]
     @ObservationIgnored private var compositionMemo: [Float: (version: Int, composition: Composition)] = [:]
     @ObservationIgnored private var fixedAnalysis: (song: ObjectIdentifier, fix: BeatFix, analysis: SongAnalysis)?
+    /// Slides being loaded now, so an import or undo meanwhile never queues them twice.
+    @ObservationIgnored private var inFlight: Set<UUID> = []
+    /// Slides whose files could not be read; they are not tried again.
+    @ObservationIgnored private var failedMedia: Set<UUID> = []
+    /// Names of slides that could not be read in the current batch.
+    @ObservationIgnored private var unreadable: [String] = []
+    /// Slides loading at a size since given up for a smaller one; they load again when they finish.
+    @ObservationIgnored private var staleLoads: Set<UUID> = []
+    /// The largest texture side loaded, so a deck grown past it loads smaller.
+    @ObservationIgnored private var loadedSide: Int?
+    /// A few at a time, in rail order: each load holds a full-size raster, and
+    /// a 100-page PDF loaded all at once can take gigabytes.
+    @ObservationIgnored private lazy var loadQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 3
+        q.qualityOfService = .userInitiated
+        return q
+    }()
 
     /// A plan and what goes with it, for one canvas.
     struct Planned: Sendable {
@@ -60,11 +78,19 @@ final class BeatSession: StageSource {
         self.document = document
         project = document.project
         clock.duration = 30
+        if document.fromNewerVersion {
+            message = "This project was made with a newer Deck Beat. It opens with what this version knows, and won't be saved over; choose File › Duplicate to keep changes."
+        }
     }
 
     /// Loads the song and the slides once the window is up, and fills an empty
     /// project with the sample deck so it plays straight away.
     func start() {
+        // A new window starts on the first starter song (headless runs keep the demo groove unless asked).
+        if project.slides.isEmpty, project.song == nil {
+            let pick = StudioSnapshot.isRequested ? StudioSnapshot.arg("--song").flatMap(Int.init).map { $0 - 1 } : 0
+            if let i = pick, StarterSong.all.indices.contains(i) { useStarterSong(StarterSong.all[i], undoable: false) }
+        }
         if song == nil, !songLoading { loadSong() }
         if project.slides.isEmpty { addStarterSlides() } else { loadMedia() }
     }
@@ -136,8 +162,40 @@ final class BeatSession: StageSource {
     var fps: Int { project.fps }
     var format: CanvasFormat { project.format }
     var look: Look { Looks.look(project.look) }
-    var exportName: String { "Deck Beat " + look.name }
     var soundTitle: String? { song?.title }
+
+    /// Where this window's document is saved, or nil while it is untitled.
+    @ObservationIgnored var documentURL: URL?
+
+    /// The saved document's name and the look, so exports of different
+    /// projects never share a name.
+    var exportName: String {
+        if let url = documentURL { return url.deletingPathExtension().lastPathComponent + " " + look.name }
+        return "Deck Beat " + look.name
+    }
+
+    // MARK: Background
+
+    var transparentBackground: Bool { project.transparent }
+
+    /// Backdrop or transparent, for this project and, as a starting point, the next new one.
+    func setTransparentBackground(_ on: Bool) {
+        guard on != transparentBackground else { return }
+        update(on ? "Transparent Background" : "Backdrop") { $0.transparent = on }
+        UserDefaults.standard.set(on, forKey: BeatProject.transparentKey)
+    }
+
+    /// The stage holds still under the export sheet, so the export has the GPU to itself.
+    var stageSuspended: Bool { showExport }
+
+    /// What an export still waits for, or nil once the song and every slide are in.
+    var exportWaitNote: String? {
+        if isReady { return nil }
+        if song == nil { return "Listening to the song…" }
+        if project.slides.isEmpty { return preparingSamples ? "Setting out the slides…" : "Add slides to export a video." }
+        let waiting = max(importing, 1)
+        return "Waiting for \(waiting) slide\(waiting == 1 ? "" : "s") to load…"
+    }
 
     var loopDuration: Double { loopDuration(for: project.format) }
 
@@ -161,23 +219,33 @@ final class BeatSession: StageSource {
 
     var exportCaption: String? {
         guard let c = clip else { return nil }
-        return "\(timecode(c.start))–\(timecode(c.start + c.length)) of the song, \(c.outro == .loop ? "looping" : "with its ending")."
+        return "\(timecode(c.start))–\(timecode(c.start + c.length)) of the song, \(c.outro.loops ? "looping" : "with its ending")."
     }
+
+    /// Each slide's own shape, in deck order.
+    var slideAspects: [Float] { project.slides.map { textures[$0.id]?.aspect ?? $0.aspect } }
 
     /// The slides' usual shape.
-    var slideAspect: Float {
-        Composer.typicalAspect(project.slides.map { textures[$0.id]?.aspect ?? $0.aspect })
-    }
+    var slideAspect: Float { Composer.typicalAspect(slideAspects) }
 
     var starred: Set<Int> { Set(project.slides.indices.filter { project.slides[$0].featured }) }
+
+    /// The cover's thumbnail: the first starred slide, or the first slide.
+    var coverThumbnail: CGImage? {
+        guard let cover = project.slides.first(where: \.featured) ?? project.slides.first else { return nil }
+        return thumbnails[cover.id]
+    }
 
     func planned(for format: CanvasFormat) -> Planned? {
         let aspect = Float(format.aspect)
         // Asked for several times a frame (stage, sound, transport): worked out once per change.
         if let m = plannedMemo[aspect], m.version == version { return m.planned }
         guard let analysis, !project.slides.isEmpty else { return nil }
-        let slideAspect = self.slideAspect
-        let clip = project.clip.resolve(analysis, settings: project.settings, landOnDrop: project.landOnDrop)
+        let aspects = slideAspects
+        let slideAspect = Composer.typicalAspect(aspects)
+        let grid = project.settings.grid
+        let clip = project.clip.resolve(analysis, settings: project.settings, landOnDrop: project.landOnDrop,
+                                        cells: grid.cells(slides: project.slides.count))
         var h = Hasher()
         // The song's cache is cleared when the song changes; its corrections are part of the key.
         h.combine(project.beat)
@@ -185,6 +253,8 @@ final class BeatSession: StageSource {
         h.combine(clip)
         h.combine(aspect)
         h.combine(slideAspect)
+        // A collage gives every slide a cell of its own shape.
+        if grid.arrangement == .collage { h.combine(aspects) }
         h.combine(project.slides.count)
         h.combine(starred)
         let clear = Self.clearance(for: project, format: format)
@@ -195,7 +265,7 @@ final class BeatSession: StageSource {
             made = hit
         } else {
             made = Self.plan(analysis, settings: project.settings, clip: clip, aspect: aspect, slideAspect: slideAspect,
-                             slides: project.slides.count, starred: starred, clear: clear)
+                             slides: project.slides.count, aspects: aspects, starred: starred, clear: clear)
             if planCache.count > 24 { planCache.removeAll() }
             planCache[key] = made
         }
@@ -205,22 +275,23 @@ final class BeatSession: StageSource {
     }
 
     nonisolated static func plan(_ analysis: SongAnalysis, settings: BeatSettings, clip: ClipRange, aspect: Float, slideAspect: Float,
-                                 slides: Int, starred: Set<Int>, clear: Clearance) -> Planned {
+                                 slides: Int, aspects: [Float], starred: Set<Int>, clear: Clearance) -> Planned {
         let (layout, plan) = Composer.plan(analysis, settings: settings, clip: clip, aspect: aspect, slideAspect: slideAspect,
-                                           slides: slides, starred: starred, clear: clear)
+                                           slides: slides, aspects: aspects, starred: starred, clear: clear)
         return Planned(clip: clip, layout: layout, plan: plan, modulate: Atmosphere.modulate(plan: plan, atmosphere: settings.atmosphere))
     }
 
     /// What it takes to plan `p` on `format`, ready to be worked out off the main thread.
     func planJob(for p: BeatProject, format: CanvasFormat) -> (@Sendable () -> Planned)? {
         guard let analysis, !p.slides.isEmpty else { return nil }
-        let settings = p.settings, clip = p.clip, landOnDrop = p.landOnDrop, aspect = Float(format.aspect), slideAspect = slideAspect
+        let settings = p.settings, clip = p.clip, landOnDrop = p.landOnDrop, aspect = Float(format.aspect)
+        let aspects = p.slides.map { textures[$0.id]?.aspect ?? $0.aspect }, slideAspect = Composer.typicalAspect(aspects)
         let count = p.slides.count, starred = Set(p.slides.indices.filter { p.slides[$0].featured })
         let clear = Self.clearance(for: p, format: format)
         return {
-            let range = clip.resolve(analysis, settings: settings, landOnDrop: landOnDrop)
+            let range = clip.resolve(analysis, settings: settings, landOnDrop: landOnDrop, cells: settings.grid.cells(slides: count))
             return BeatSession.plan(analysis, settings: settings, clip: range, aspect: aspect, slideAspect: slideAspect, slides: count,
-                                    starred: starred, clear: clear)
+                                    aspects: aspects, starred: starred, clear: clear)
         }
     }
 
@@ -263,11 +334,15 @@ final class BeatSession: StageSource {
         for (i, item) in p.slides.enumerated() where item.kind == .video {
             if let d = clipDurations[item.id], d > 0 { videos[i] = VideoClip(url: document.media.url(for: item.file), duration: d) }
         }
-        var comp = Composer.composition(plan: planned.plan, layout: planned.layout, settings: p.settings, stage: p.stage,
+        var settings = p.settings
+        // Over someone else's footage a mirror floor would hang below the grid in mid-air.
+        if p.transparent { settings.grid.wall.reflection = 0 }
+        var comp = Composer.composition(plan: planned.plan, layout: planned.layout, settings: settings, stage: p.stage,
                                         backdrop: p.backdrop, textures: textures, aspects: aspects, focals: p.slides.map(\.focal),
                                         canvasAspect: Float(format.aspect), videos: videos, modulate: planned.modulate)
         comp.overlay = titleOverlay(p, plan: planned.plan)
         comp.itemPalettes = p.slides.map { slidePalettes[$0.id] }
+        comp.transparent = p.transparent
         return comp
     }
 
@@ -279,14 +354,19 @@ final class BeatSession: StageSource {
         switch title.ink {
         case .light: return true
         case .dark: return false
-        case .auto: return title.placement == .centre || p.backdrop.palette.meanLightness * min(p.backdrop.brightness, 1.2) < 0.62
+        // Over footage nobody here can see, light ink with its shadow is the safe choice.
+        case .auto: return title.placement == .centre || p.transparent
+            || p.backdrop.palette.meanLightness * min(p.backdrop.brightness, 1.2) < 0.62
         }
     }
 
     /// The title over a composition of `p`, its words landing on the beats of `plan` when asked.
     func titleOverlay(_ p: BeatProject, plan: BeatPlan) -> TitleOverlay? {
         guard let title = p.title else { return nil }
-        return TitleArt.overlay(title, light: titleIsLight(p), cues: WordTiming.cues(title, plan: plan))
+        var overlay = TitleArt.overlay(title, light: titleIsLight(p), cues: WordTiming.cues(title, plan: plan))
+        // A title card's dimming is a black veil over the footage below; half of it still sets the words apart.
+        if p.transparent { overlay?.scrim *= 0.5 }
+        return overlay
     }
 
     func setTitle(_ name: String, _ change: (inout ReelTitle) -> Void) {
@@ -320,7 +400,7 @@ final class BeatSession: StageSource {
         h.combine(c)
         let key = h.finalize()
         if let cached = audioCache, cached.key == key { return cached.track }
-        let loop = c.outro == .loop
+        let loop = c.outro.loops
         let track = song.slice(from: c.start, length: c.length, fadeIn: loop ? 0.03 : 0.012, fadeOut: loop ? 0.03 : min(1.5, c.length * 0.2))
         audioCache = (key, track)
         return track
@@ -332,6 +412,7 @@ final class BeatSession: StageSource {
             lastSoundTime = nil
             return nil
         }
+        sound.muted = UserDefaults.standard.bool(forKey: "previewMuted")
         let loop = loopDuration
         // Restart when the sound changed or the playhead was moved by hand.
         let moved = lastSoundTime.map { abs(wrap(time - $0 + loop / 2, loop) - loop / 2) > 0.05 } ?? true
@@ -406,6 +487,27 @@ final class BeatSession: StageSource {
         clock.time = 0
     }
 
+    /// Plays a song that comes with the app; it's copied into the project like any other.
+    func useStarterSong(_ starter: StarterSong, undoable: Bool = true) {
+        guard let url = starter.url, let stored = try? document.media.importFile(url) else {
+            message = "That starter song could not be found in the app."
+            return
+        }
+        let change: (inout BeatProject) -> Void = { p in
+            p.song = SongFile(file: stored, title: starter.title)
+            p.clip.bestPart = true
+            p.beat = .none
+        }
+        if undoable { update("Choose \(starter.title)", change) } else { live(change) }
+        clock.time = 0
+    }
+
+    /// The starter song playing now, if it is one.
+    var starterSong: StarterSong? {
+        guard let title = project.song?.title else { return nil }
+        return StarterSong.all.first { $0.title == title }
+    }
+
     func useDemoSong() {
         update("Use the Demo Groove") { p in
             p.song = nil
@@ -455,8 +557,9 @@ final class BeatSession: StageSource {
     /// around the caption it has now.
     static func refit(_ p: inout BeatProject) {
         guard p.gridFollowsDeck, !p.slides.isEmpty else { return }
+        let aspects = p.slides.map(\.aspect)
         p.settings.grid = p.settings.grid.fitted(count: p.slides.count, aspect: Float(p.format.aspect),
-                                                  slideAspect: Composer.typicalAspect(p.slides.map(\.aspect)),
+                                                  slideAspect: Composer.typicalAspect(aspects), aspects: aspects,
                                                   clear: clearance(for: p, format: p.format))
     }
 
@@ -484,6 +587,8 @@ final class BeatSession: StageSource {
             Self.refit(&p)
         }
         if let s = selection, ids.contains(s) { selection = project.slides.first?.id }
+        // Lets go of the removed slides' textures; an undo loads them again.
+        loadMedia()
     }
 
     func move(from source: IndexSet, to destination: Int) {
@@ -523,17 +628,39 @@ final class BeatSession: StageSource {
         }
     }
 
-    /// Loads textures and thumbnails for slides that have none yet.
+    /// Loads textures and thumbnails for slides that have none yet, three at
+    /// a time, and lets go of slides no longer in the project. When the deck
+    /// has grown so far that its textures should shrink, loads them all again smaller.
     func loadMedia() {
+        let ids = Set(project.slides.map(\.id))
+        textures = textures.filter { ids.contains($0.key) }
+        thumbnails = thumbnails.filter { ids.contains($0.key) }
+        slidePalettes = slidePalettes.filter { ids.contains($0.key) }
+        clipDurations = clipDurations.filter { ids.contains($0.key) }
+        failedMedia.formIntersection(ids)
         let side = MediaLoader.textureSide(forItems: project.slides.count)
-        let missing = project.slides.filter { textures[$0.id] == nil }
-        guard !missing.isEmpty else { return }
-        importing += missing.count
+        if let loaded = loadedSide, Double(side) < Double(loaded) * 0.8 {
+            staleLoads = inFlight
+            load(project.slides.filter { !inFlight.contains($0.id) && !failedMedia.contains($0.id) })
+            loadedSide = side
+            return
+        }
+        let missing = project.slides.filter { textures[$0.id] == nil && !inFlight.contains($0.id) && !failedMedia.contains($0.id) }
+        load(missing)
+    }
+
+    private func load(_ items: [MediaItem]) {
+        guard !items.isEmpty else { return }
+        if importing == 0 { unreadable = [] }
+        importing += items.count
+        inFlight.formUnion(items.map(\.id))
+        let side = MediaLoader.textureSide(forItems: project.slides.count)
+        loadedSide = items.count >= project.slides.count ? side : max(loadedSide ?? side, side)
         let store = document.media
-        for item in missing {
+        for item in items {
             let url = store.url(for: item.file)
-            let kind = item.kind, page = item.page, id = item.id
-            if kind == .video {
+            let kind = item.kind, page = item.page, id = item.id, name = item.name
+            if kind == .video, clipDurations[id] == nil {
                 // How long the clip runs, for a slide that plays it through.
                 Task { [weak self] in
                     guard let d = try? await AVURLAsset(url: url).load(.duration).seconds, d.isFinite, let self else { return }
@@ -542,14 +669,27 @@ final class BeatSession: StageSource {
                     self.clock.duration = self.loopDuration
                 }
             }
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let tex = try? MediaLoader.load(url: url, kind: kind, page: page, maxSide: side)
-                let thumb = MediaLoader.cgImage(url: url, kind: kind, page: page, maxSide: 360)
+            loadQueue.addOperation { [weak self] in
+                // One raster serves both: the texture, and the rail's thumbnail scaled from it.
+                let (tex, thumb) = MediaLoader.loadWithThumbnail(url: url, kind: kind, page: page, maxSide: side, thumbnailSide: 360)
                 let palette = thumb.flatMap { Palette.extract(from: [$0], name: "") }
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.importing = max(0, self.importing - 1)
-                    if let tex {
+                    self.inFlight.remove(id)
+                    let present = self.project.slides.contains(where: { $0.id == id })
+                    if tex == nil, present {
+                        self.failedMedia.insert(id)
+                        self.unreadable.append(name)
+                    }
+                    if self.importing == 0, !self.unreadable.isEmpty {
+                        let names = ListFormatter.localizedString(byJoining: self.unreadable)
+                        let one = self.unreadable.count == 1
+                        self.message = "\(names) could not be read, so \(one ? "it shows" : "they show") as a grey slide. Try exporting the file again, or replace it."
+                        self.unreadable = []
+                    }
+                    // A slide removed while it loaded is not kept.
+                    if present, let tex {
                         self.textures[id] = tex
                         if let i = self.project.slides.firstIndex(where: { $0.id == id }), abs(self.project.slides[i].aspect - tex.aspect) > 0.001 {
                             // The true shape, recorded without an undo step.
@@ -560,10 +700,14 @@ final class BeatSession: StageSource {
                             self.document.project = p
                         }
                     }
-                    if let thumb { self.thumbnails[id] = thumb }
-                    if let palette { self.slidePalettes[id] = palette }
+                    if present, let thumb { self.thumbnails[id] = thumb }
+                    if present, let palette { self.slidePalettes[id] = palette }
                     self.version += 1
                     self.clock.duration = self.loopDuration
+                    // Loaded at a size since given up for a smaller one: load again.
+                    if self.staleLoads.remove(id) != nil, tex != nil, let item = self.project.slides.first(where: { $0.id == id }) {
+                        self.load([item])
+                    }
                 }
             }
         }
@@ -643,12 +787,49 @@ final class BeatSession: StageSource {
 
     func usePreset(_ g: GridSettings) {
         update("Grid") { p in
+            p.settings.grid.arrangement = .grid
             p.settings.grid.columns = g.columns
             p.settings.grid.rows = g.rows
             p.settings.grid.shape = g.shape
             p.gridFollowsDeck = false
         }
     }
+
+    /// Grid or collage. A collage lays the slides in deck order and takes its
+    /// rows and columns from the deck; back to a grid, the grid refits to it.
+    func setArrangement(_ a: Arrangement) {
+        update(a == .collage ? "Collage" : "Grid") { p in
+            p.settings.grid.arrangement = a
+            if a == .collage {
+                p.settings.grid.order = .reading
+            } else {
+                let aspects = p.slides.map(\.aspect)
+                let f = BeatKit.GridLayout.fit(count: max(p.slides.count, 1), aspect: Float(p.format.aspect),
+                                       slideAspect: Composer.typicalAspect(aspects), base: p.settings.grid,
+                                       clear: Self.clearance(for: p, format: p.format))
+                p.settings.grid.columns = f.columns
+                p.settings.grid.rows = f.rows
+                p.settings.grid.shape = .auto
+            }
+        }
+        rewind()
+    }
+
+    /// How the board comes in. Moving to a build opens on the empty room.
+    func setPace(_ pace: IntroPace) {
+        update("Build") { p in
+            if pace.builds, !p.settings.intro.pace.builds { p.settings.intro.coldOpen = false }
+            p.settings.intro.pace = pace
+        }
+        rewind()
+    }
+
+    func useStates(_ preset: StatePreset) {
+        update(preset.name) { preset.apply(&$0.settings) }
+    }
+
+    /// Distinct slide shapes in the deck, widest over narrowest more than 30 % apart.
+    var mixedShapes: Bool { BeatKit.GridLayout.isMixed(slideAspects) }
 
     /// Cells too small to read with nothing stepping forward.
     var hardToRead: Bool {

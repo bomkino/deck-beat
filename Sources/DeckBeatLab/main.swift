@@ -11,7 +11,8 @@ import UniformTypeIdentifiers
 
 // beat-lab: headless checks and renders, for CI and visual review.
 //
-//   beat-lab check                 song analysis, layout, plans and scenes, on the CPU
+//   beat-lab check                 song analysis, layout, plans and scenes, on the CPU; and
+//                                  transparent exports on the GPU, where there is one
 //   beat-lab bench                 how long listening and planning take, on the CPU
 //   beat-lab render --out <dir>    contact sheets of every Look, of wide decks and of the 3.0
 //                                  moves, a demo clip with sound, and export timings old and new
@@ -21,7 +22,8 @@ let args = Array(CommandLine.arguments.dropFirst())
 
 switch args.first {
 case "check":
-    let failed = Checks.run()
+    var failed = Checks.run()
+    failed += await TransparentExport.run()
     print(failed == 0 ? "All checks passed." : "\(failed) checks failed.")
     exit(failed == 0 ? 0 : 1)
 
@@ -142,14 +144,15 @@ enum Render {
         if let grid { settings.grid = grid(settings.grid) }
         tweak?(&settings)
         let aspects = media.map(\.aspect)
-        let range = clip.resolve(song.analysis, settings: settings)
+        let range = clip.resolve(song.analysis, settings: settings, cells: settings.grid.cells(slides: media.count))
         var clear = Clearance.none
         if let title, title.timing == .throughout {
             let reach = TitleArt.reach(title, width: canvas.w, height: canvas.h)
             clear = Clearance(top: Float(reach.top), bottom: Float(reach.bottom))
         }
         let (layout, plan) = Composer.plan(song.analysis, settings: settings, clip: range, aspect: aspect,
-                                           slideAspect: Composer.typicalAspect(aspects), slides: media.count, clear: clear)
+                                           slideAspect: Composer.typicalAspect(aspects), slides: media.count, aspects: aspects,
+                                           clear: clear)
         var comp = Composer.composition(plan: plan, layout: layout, settings: settings, stage: look.stage, backdrop: look.backdrop(nil),
                                         textures: media.map(\.texture), aspects: aspects, canvasAspect: aspect)
         if let title { comp.overlay = TitleArt.overlay(title, light: true, cues: WordTiming.cues(title, plan: plan)) }

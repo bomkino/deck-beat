@@ -39,20 +39,37 @@ struct TitlePage: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Type").textStyle(.bodyCompact).foregroundStyle(.secondary)
-                    ChoiceRow(ReelTitle.Face.allCases.map { ($0, $0.title) }, selection: choice(\.face, "Typeface"))
+                    // Each face named in itself.
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)],
+                              spacing: 4) {
+                        ForEach(ReelTitle.Face.allCases, id: \.self) { face in
+                            let on = title.face == face
+                            Button { choice(\.face, "Typeface").wrappedValue = face } label: {
+                                Text(face.title).font(Font(face.titleFont(12)))
+                                    .foregroundStyle(on ? Color.primary : Color.secondary).lineLimit(1).minimumScaleFactor(0.7)
+                                    .frame(maxWidth: .infinity).frame(height: 28)
+                                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? Theme.segmentOn : Theme.well.opacity(0.7)))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Ink").textStyle(.bodyCompact).foregroundStyle(.secondary)
                     ChoiceRow(ReelTitle.Ink.allCases.map { ($0, $0.title) }, selection: choice(\.ink, "Title Ink"))
                 }
-                Toggle(isOn: Binding(get: { title.beat }, set: { v in
-                    session.setTitle("Words on the Beat") { $0.beat = v }
-                    revealIfHidden()
-                })) {
-                    Text("Words land on the beat").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Words").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                    ChoiceRow([("together", "Together")] + ReelTitle.Motion.allCases.map { ($0.rawValue, $0.title) },
+                              selection: Binding(get: { title.beat ? title.motion.rawValue : "together" }, set: { v in
+                                  session.setTitle("Words on the Beat") { t in
+                                      t.beat = v != "together"
+                                      if let m = ReelTitle.Motion(rawValue: v) { t.motion = m }
+                                  }
+                                  revealIfHidden()
+                              }))
+                        .help("Together rises in as one. Land, Pop and Reveal bring the line above in first, then the title a few words at a time, each on a beat")
                 }
-                .toggleStyle(.switch).controlSize(.mini)
-                .help("The line above lands first, then the title a few words at a time, each on a beat")
                 Text(note(title)).textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -126,9 +143,15 @@ struct TitlePage: View {
             if title.placement == .corner { parts.append("The grid moves over to make room for it.") }
         }
         if title.beat {
+            let how: String
+            switch title.motion {
+            case .land: how = "fall onto the beat"
+            case .pop: how = "pop in on the beat"
+            case .reveal: how = "rise from behind their line on the beat"
+            }
             parts.append(title.timing == .throughout
-                ? "Its words land on the beat once the grid is in, and a loop lifts them off again before it turns."
-                : "Its words land on the beat, a few at a time.")
+                ? "Its words \(how) once the grid is in, and a loop lifts them off again before it turns."
+                : "Its words \(how), a few at a time.")
         }
         let words = title.text.split(whereSeparator: { $0.isWhitespace }).count
         let most = TitleArt.maxWords(title.placement)

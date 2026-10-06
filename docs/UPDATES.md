@@ -47,7 +47,7 @@ It is the same key as Drift, Galileo and Backdrop. Rules:
 2. Run the **release** workflow on `main` (Actions › release › Run workflow). It builds the app, packs the disk image and the ZIP, and publishes them on the release tagged `v<version>`, marked Latest, with the changelog section as its notes. Its `appcast.xml` offers no update yet, so nothing installs until the next step.
 3. On the release Mac, from this repository:
    ```bash
-   bash scripts/sign-release.sh 3.0.1 update-notes.md
+   bash scripts/sign-release.sh 6.0.0 update-notes.md
    ```
    It downloads the release's ZIP, checks it against `SHA256SUMS.txt`, signs it, replaces the release's `appcast.xml` with the signed one, and prints the version the feed now offers. `update-notes.md` is optional: a few lines of Markdown for the update window.
 
@@ -58,7 +58,7 @@ To make a whole release on the Mac instead, without CI: `bash scripts/build.sh r
 Things that break updates:
 
 - **The asset must be called exactly `appcast.xml`**, on the release marked **Latest**. Drafts and pre-releases don't count.
-- **Versions only go up.** Sparkle compares `CFBundleVersion`, which `build.sh` derives from the version: 3.0.1 is 30001. Never reuse or lower a version.
+- **Versions only go up.** Sparkle compares `CFBundleVersion`, which `build.sh` derives from the version: 6.0.0 is 60000. Never reuse or lower a version.
 - **Sign the ZIP that is published.** `sign-release.sh` signs the release's own ZIP. If the ZIP is replaced, sign again; a stale signature is refused, as it should be.
 - Don't delete the newest release, or its `appcast.xml`, while people may still be updating.
 
