@@ -43,9 +43,11 @@ public enum Looks {
         return s
     }
 
+    /// `mood` is how far the room leans to the colours of the slide in view.
     static func stage(surface: SurfaceKind, bloom: Float, grain: Float, vignette: Float, bend: Float = 0,
-                      shadow: Float = 0.55) -> StageLook {
+                      shadow: Float = 0.55, mood: Float = 0.5) -> StageLook {
         var look = StageLook()
+        look.mood = mood
         look.surface = surface
         look.bend = bend > 0 ? .paper : .rigid
         look.bendAmount = bend
@@ -74,13 +76,15 @@ public enum Looks {
 
     public static let all: [Look] = [
         Look(id: "screening-room", name: "Screening Room",
-             summary: "Slides wait in the dark and come up in colour on the beat. Every fourth bar, one steps forward to be read.",
+             summary: "Slides wait in the dark and come up in colour on the beat. Every fourth bar the camera moves in on one; on a drop they fan out like a hand of cards.",
              apply: { s in
                  s.mode = .pulse
                  s.sensitivity = 0.6
+                 s.featureStyle = .zoom
+                 s.dropMove = .fan
              },
              backdrop: { _ in studio(["#0B0C0D", "#141517", "#1B1D20", "#26292E", "#33373D"]) },
-             stage: stage(surface: .satin, bloom: 0.15, grain: 0.06, vignette: 0.25)),
+             stage: stage(surface: .satin, bloom: 0.15, grain: 0.06, vignette: 0.25, mood: 0.6)),
 
         Look(id: "night-shift", name: "Night Shift",
              summary: "A block of flats after dark. The music decides who is home.",
@@ -99,12 +103,13 @@ public enum Looks {
                  s.intro.order = .random
                  s.intro.bars = 2
                  s.outro = .lightsOut
+                 s.turn = .blinds
              },
              backdrop: { _ in studio(["#000000", "#030304", "#07080A", "#0D0F12", "#15181C"], brightness: 0.8, accent: 0.2) },
-             stage: stage(surface: .original, bloom: 0.3, grain: 0.12, vignette: 0.4)),
+             stage: stage(surface: .original, bloom: 0.3, grain: 0.12, vignette: 0.4, mood: 0.3)),
 
         Look(id: "ripple", name: "Ripple",
-             summary: "Each kick sends a ring out from the middle. Snares start smaller rings of their own.",
+             summary: "Each kick sends a ring out from the middle. Snares start smaller rings of their own. A drop opens a tunnel of slides.",
              apply: { s in
                  s.mode = .ripple
                  s.spread = 0.75
@@ -116,6 +121,7 @@ public enum Looks {
                  s.motion.idleAmount = 0.2
                  s.intro.entrance = .depth
                  s.intro.order = .centreOut
+                 s.dropMove = .tunnel
              },
              backdrop: { deck in
                  var b = BackdropCatalog.style("aurora").defaults
@@ -123,10 +129,10 @@ public enum Looks {
                  b.brightness = 0.7
                  return b
              },
-             stage: stage(surface: .satin, bloom: 0.25, grain: 0.08, vignette: 0.3)),
+             stage: stage(surface: .satin, bloom: 0.25, grain: 0.08, vignette: 0.3, mood: 0.5)),
 
         Look(id: "read-through", name: "Read-through",
-             summary: "The light reads the deck in order, one slide per beat.",
+             summary: "The light reads the deck in order, one slide per beat. Slides are laid down like pages; a drop runs them past as a strip.",
              apply: { s in
                  s.mode = .readThrough
                  s.step = 0
@@ -134,9 +140,11 @@ public enum Looks {
                  s.rest = CellState(scale: 0.95, brightness: 0.55, colour: 0.5, lift: 0, glow: 0, blur: 1, shadow: 0.4)
                  s.lit = CellState(scale: 1.1, brightness: 1, colour: 1, lift: 0.06, glow: 0.15, tilt: 2, shadow: 1.3, open: 1)
                  s.motion.bounce = 0.12
-                 s.intro.entrance = .deal
+                 s.intro.entrance = .page
                  s.intro.order = .reading
                  s.intro.coldOpen = false
+                 s.dropMove = .strip
+                 s.turn = .page
              },
              backdrop: { _ in
                  var b = BackdropCatalog.style("dotgrid").defaults
@@ -144,7 +152,7 @@ public enum Looks {
                  b.brightness = 0.75
                  return b
              },
-             stage: stage(surface: .print, bloom: 0.1, grain: 0.08, vignette: 0.25)),
+             stage: stage(surface: .print, bloom: 0.1, grain: 0.08, vignette: 0.25, mood: 0.35)),
 
         Look(id: "equaliser", name: "Equaliser",
              summary: "Bass on the left, cymbals on the right. Each column fills to the level of its part of the song.",
@@ -157,6 +165,7 @@ public enum Looks {
                  s.motion.bounce = 0
                  s.intro.entrance = .rise
                  s.intro.order = .columns
+                 s.dropMove = .weave
              },
              backdrop: { _ in
                  var b = BackdropCatalog.style("halftone").defaults
@@ -164,10 +173,10 @@ public enum Looks {
                  b.brightness = 0.55
                  return b
              },
-             stage: stage(surface: .original, bloom: 0, grain: 0.08, vignette: 0.3)),
+             stage: stage(surface: .original, bloom: 0, grain: 0.08, vignette: 0.3, mood: 0.3)),
 
         Look(id: "gallery-wall", name: "Gallery Wall",
-             summary: "The grid hung on an angled wall above a polished floor. For slower songs and quieter work.",
+             summary: "The grid hung on an angled wall above a polished floor, the camera walking up to one slide at a time. For slower songs and quieter work.",
              apply: { s in
                  s.mode = .pulse
                  s.sensitivity = 0.45
@@ -180,9 +189,12 @@ public enum Looks {
                  s.motion.idleAmount = 0.2
                  s.intro.entrance = .unfold
                  s.intro.order = .columns
+                 s.featureStyle = .zoom
+                 s.dropMove = .weave
+                 s.turn = .page
              },
              backdrop: { _ in studio(["#17120D", "#221B14", "#2E251C", "#3D3226", "#53443A"], brightness: 0.85, accent: 0.45) },
-             stage: stage(surface: .satin, bloom: 0.12, grain: 0.08, vignette: 0.3, bend: 0.3, shadow: 0.7)),
+             stage: stage(surface: .satin, bloom: 0.12, grain: 0.08, vignette: 0.3, bend: 0.3, shadow: 0.7, mood: 0.45)),
 
         Look(id: "light-box", name: "Light Box",
              summary: "A pale room for light decks. Resting slides go grey; playing slides come back in colour.",
@@ -190,11 +202,13 @@ public enum Looks {
                  s.mode = .pulse
                  s.rest = CellState(scale: 0.95, brightness: 0.95, colour: 0, lift: 0, glow: 0, opacity: 0.7, shadow: 0.3)
                  s.lit = CellState(scale: 1.05, brightness: 1, colour: 1, lift: 0.05, glow: 0, tilt: 2, shadow: 1.5)
-                 s.intro.entrance = .rise
+                 s.intro.entrance = .blinds
                  s.intro.order = .diagonal
+                 s.dropMove = .fan
+                 s.turn = .blinds
              },
              backdrop: { _ in studio(["#D9D9D6", "#E3E3E0", "#EDEDEB", "#F3F3F1", "#FAFAF8"], brightness: 1, accent: 0.2, detail: 0.4) },
-             stage: stage(surface: .print, bloom: 0, grain: 0.05, vignette: 0.08, bend: 0.2, shadow: 0.35)),
+             stage: stage(surface: .print, bloom: 0, grain: 0.05, vignette: 0.08, bend: 0.2, shadow: 0.35, mood: 0.5)),
     ]
 
     /// The deck's colours, pulled down so the backdrop stays behind the slides.

@@ -1,10 +1,11 @@
 # Builds Deck Beat and beat-lab on an Apple silicon runner with Xcode, for each
 # push, each pull request from a fork and on demand, then runs beat-lab's CPU
-# checks, renders its contact sheet and demo clip, and opens the app bundle to
-# render a still and capture its window. The renders are kept as the
-# deck-beat-lab artifact. The render needs Metal; on a runner without it
-# beat-lab says "skipped:" and passes. scripts/verify.sh renders every Look
-# through the app; run it locally before a release.
+# checks, renders its contact sheets and demo clip, opens the app bundle to
+# render stills and capture its window, and proves in-app updates end to end
+# with a throwaway key. The renders are kept as the deck-beat-lab artifact.
+# The render needs Metal; on a runner without it beat-lab says "skipped:" and
+# passes. scripts/verify.sh renders every Look through the app; run it locally
+# before a release.
 name: verify
 
 on:
@@ -42,15 +43,41 @@ jobs:
           bash scripts/build.sh release
           APP="../dist/Deck Beat.app/Contents/MacOS/DeckBeat"
           mkdir -p lab-output
+          # Runs the app headless. If it hasn't finished after 180 s, it shows where
+          # the app is stuck, from a sample of its threads, and fails.
+          headless() {
+            "$APP" "$@" &
+            local pid=$!
+            for _ in $(seq 1 180); do
+              if ! kill -0 "$pid" 2>/dev/null; then wait "$pid"; return; fi
+              sleep 1
+            done
+            echo "stuck after 180 s: DeckBeat $*"
+            sample "$pid" 3 -file "$RUNNER_TEMP/stuck.txt" > /dev/null 2>&1 || true
+            sed -n '/^Call graph:/,/^Total number in stack/p' "$RUNNER_TEMP/stuck.txt" | head -250 || true
+            kill -9 "$pid"
+            return 1
+          }
           # A new window with the sample deck and demo groove, rendered through the app's own session.
-          perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still.png --look ripple --format reel --time 2
+          headless --still lab-output/app-still.png --look ripple --format reel --time 2
           # Decks made for wide screens dropped into a new window, through the same import as a drop:
           # 20 slides at 2576 × 1080; 30 at 1920 × 1080 as one steps out front; and 24 at 1920 × 1080
           # with a caption shown throughout.
-          perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still-wide.png --deck wide --slides 20 --format reel --time 9
-          perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still-hd.png --deck hd --slides 30 --format reel --time 18.3
-          perl -e 'alarm 240; exec @ARGV' "$APP" --still lab-output/app-still-hd-caption.png --deck hd --slides 24 --format reel --time 9 \
+          headless --still lab-output/app-still-wide.png --deck wide --slides 20 --format reel --time 9
+          headless --still lab-output/app-still-hd.png --deck hd --slides 30 --format reel --time 18.3
+          headless --still lab-output/app-still-hd-caption.png --deck hd --slides 24 --format reel --time 9 \
             --title "Brightside raises its Series A" --kicker "pitch.dog · 2026" --caption
+          # The 3.0 moves, in the same Reel frame: each drop move, a zoom on a featured slide,
+          # cells turning over as blinds, and a title whose words land on the beat.
+          still() { headless --still "lab-output/app-$1.png" --format reel "${@:2}"; }
+          still v3-words --deck hd --slides 15 --time word:2 --beat-words \
+            --title "Brightside raises its Series A" --kicker "pitch.dog · 2026"
+          still v3-fan --deck wide --slides 20 --drop fan --time drop:0.9
+          still v3-tunnel --deck hd --slides 24 --drop tunnel --time drop:1.4
+          still v3-strip --deck hd --slides 15 --drop strip --time drop:1.6
+          still v3-weave --deck wide --slides 15 --drop weave --time drop:-0.45
+          still v3-zoom --deck wide --slides 15 --feature zoom --time feature:0.4
+          still v3-blinds --deck hd --slides 30 --grid 3x5 --turn blinds --time swap:-0.06
           # The whole window, inspector and transport included, once it has settled,
           # and the screen as the runner shows it, which also catches glass and vibrancy.
           perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1220x720 --time 2 --settle 10 \
@@ -61,12 +88,16 @@ jobs:
           wait
           cat "$RUNNER_TEMP/app.log"
           # Small copies in the log, for reviewers who can't download the artifact.
-          for f in app-window app-screen app-still-wide app-still-hd app-still-hd-caption; do
+          for f in app-window app-screen app-still-wide app-still-hd app-still-hd-caption \
+                   app-v3-fan app-v3-tunnel app-v3-strip app-v3-weave app-v3-zoom app-v3-blinds app-v3-words; do
             [ -s "lab-output/$f.png" ] || continue
             sips -s format jpeg -s formatOptions 70 -Z 1200 "lab-output/$f.png" --out "$RUNNER_TEMP/$f.jpg" >/dev/null
             echo "thumbnail: $f.jpg"
             base64 -b 1000 -i "$RUNNER_TEMP/$f.jpg" | sed "s/^/b64-$f /"
           done
+      - name: Prove in-app updates with a throwaway key
+        if: ${{ !cancelled() }}
+        run: bash scripts/test-updates.sh
       - name: Keep the renders
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

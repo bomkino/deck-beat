@@ -37,6 +37,9 @@ public struct CardPose: Sendable {
     /// Phase of the travelling folds. Advance it by whole turns over a loop
     /// (2π times an integer), or the folds jump where the loop joins.
     public var foldPhase: Float = 0
+    /// Bends this card as paper, whatever the look's bend, scaling its curl
+    /// and fold: a page being turned on a stage of rigid cards. Nil follows the look.
+    public var flex: Float? = nil
     /// Corner radius as a fraction of the shorter side.
     public var corner: Float = 0.045
     /// Multiplies the shadow this card casts.

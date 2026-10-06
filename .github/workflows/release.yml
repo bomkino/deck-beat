@@ -1,0 +1,54 @@
+# Publishes a release of Deck Beat from main, on demand (Actions › release ›
+# Run workflow): builds the app at the version in scripts/build.sh, packs the
+# disk image and the ZIP the in-app updater installs, and publishes them on the
+# release tagged v<version>, marked Latest, with checksums and the notes from
+# CHANGELOG.md.
+#
+# The release's appcast.xml offers no update until it is signed: run
+# `bash scripts/sign-release.sh <version>` on the Mac that holds the update key
+# (docs/UPDATES.md). The key never comes near GitHub.
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version
+        id: version
+        run: |
+          v="$(sed -n 's/.*VERSION="\([0-9.]*\)".*/\1/p' scripts/build.sh | head -1)"
+          [ -n "$v" ] || { echo "no version in scripts/build.sh"; exit 1; }
+          if gh release view "v$v" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$v is already released; raise VERSION in scripts/build.sh first (versions only go up)"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Build Deck Beat
+        run: bash scripts/build.sh release
+      - name: Pack the release
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          bash scripts/pack-release.sh release-out
+          # The notes: this version's section of CHANGELOG.md.
+          awk -v v="$v" '$0 ~ "^## " v " " { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "no section for $v in CHANGELOG.md"; exit 1; }
+          cat notes.md
+          ls -l release-out
+      - name: Publish the release
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          gh release create "v$v" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
+            --title "Deck Beat $v for Apple silicon Macs" --notes-file notes.md release-out/*
+          gh release view "v$v" -R "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}

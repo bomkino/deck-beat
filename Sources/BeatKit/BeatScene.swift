@@ -18,6 +18,8 @@ public struct BeatScene: StageScene {
     public let cornerScale: Float
     /// Where each slide is cropped around in a filled cell (0…1, y down).
     public let focals: [SIMD2<Float>]
+    /// Each cell's distance from the middle, 0…1: the order a drop reaches them in.
+    let dropOrder: [Float]
 
     public init(plan: BeatPlan, layout: GridLayout, settings: BeatSettings, cornerScale: Float = 1, focals: [SIMD2<Float>] = []) {
         self.plan = plan
@@ -25,6 +27,7 @@ public struct BeatScene: StageScene {
         self.settings = settings
         self.cornerScale = max(cornerScale, 0.05)
         self.focals = focals
+        dropOrder = layout.count > 0 ? layout.distances(from: layout.cells[layout.centreCell].centre) : []
     }
 
     /// Where a filled cell crops a slide: left of centre, where a deck's titles
@@ -62,20 +65,37 @@ public struct BeatScene: StageScene {
         }
         let kick = BeatPlan.sample(plan.pulse, t) * (1 - reverseBlend)
 
-        // A featured slide, and how far forward it is.
+        // A featured slide, and how far forward it is: stepping out of its
+        // cell, or held where it hangs while the camera moves in on it.
         var heroCell: Int? = nil
         var heroCard: CardPose? = nil
+        var zoom: (cell: Int, progress: HeroProgress)? = nil
         var focus: Float = 0
         for (k, f) in plan.features.enumerated() where t > f.liftOff - 0.01 && t < f.end + 0.01 {
             let p = heroProgress(f, at: t)
             focus = max(focus, p.amount)
             let slide = min(f.slide, items.count - 1)
-            if let c = f.cell {
+            if let c = f.cell, s.featureStyle == .zoom {
+                zoom = (c, p)
+            } else if let c = f.cell {
                 heroCell = c
-                heroCard = hero(slide: slide, from: c, progress: p, kick: kick, ctx: ctx, occurrence: c)
+                // It leaves its cell as the cell shows it now, so nothing jumps.
+                let presented = cell(c, at: t, poseTime: poseTime, reverseBlend: reverseBlend, beat: beat, inhale: inhale, focus: 0,
+                                     kick: kick, ctx: ctx).first
+                heroCard = hero(slide: slide, from: c, presented: presented, progress: p, kick: kick, ctx: ctx, occurrence: c)
             } else {
-                heroCard = hero(slide: slide, from: nil, progress: p, kick: kick, ctx: ctx, occurrence: 100_000 + k)
+                heroCard = hero(slide: slide, from: nil, presented: nil, progress: p, kick: kick, ctx: ctx, occurrence: 100_000 + k)
             }
+        }
+
+        // A drop's weave, or the shape the grid re-forms into.
+        let moment = plan.moment(at: t)
+        var shape: [Placement] = []
+        if let m = moment, m.move.reforms, t >= m.time {
+            let aspects = (0..<n).map { items[min(plan.slide(cell: $0, at: t).slide, items.count - 1)].aspect }
+            let since = beat - plan.beatPosition(at: m.time)
+            let through = Float((t - m.time) / max(m.leave - m.time, 1e-3))
+            shape = Shapes.placements(m.move, layout: layout, aspects: aspects, cover: plan.intro.coverCell, beats: since, through: through)
         }
 
         var cards: [CardPose] = []
@@ -83,11 +103,16 @@ public struct BeatScene: StageScene {
         var deepest: Float = 0
         for c in 0..<n {
             if c == heroCell, let h = heroCard { cards.append(h); continue }
-            guard var card = cell(c, at: t, poseTime: poseTime, reverseBlend: reverseBlend, beat: beat, inhale: inhale,
-                                  focus: focus, kick: kick, ctx: ctx) else { continue }
-            card.layer = max(card.layer, 0)
-            deepest = min(deepest, card.position.z)
-            cards.append(card)
+            let featured = c == zoom?.cell
+            let pieces = cell(c, at: t, poseTime: poseTime, reverseBlend: reverseBlend, beat: beat, inhale: inhale,
+                              focus: featured ? 0 : focus, kick: kick, ctx: ctx, moment: moment, place: c < shape.count ? shape[c] : nil,
+                              zoom: featured ? zoom?.progress : nil)
+            for var card in pieces {
+                card.layer = max(card.layer, 0)
+                // Only cards that cast a shadow set where the shadows fall.
+                if card.shadow > 0.01 { deepest = min(deepest, card.position.z) }
+                cards.append(card)
+            }
         }
         if heroCell == nil, let h = heroCard { cards.append(h) }
         frame.cards = cards
@@ -99,14 +124,60 @@ public struct BeatScene: StageScene {
         }
         // The camera leans in on loud downbeats and drops, and draws back for the breath before a drop.
         let d = GridLayout.eyeDistance
-        frame.camera.offset.z = -d * plan.punch(at: t) * atmosphere + d * 0.02 * inhale * atmosphere
+        var push = -d * plan.punch(at: t) * atmosphere + d * 0.02 * inhale * atmosphere
+        if let z = zoom, z.progress.amount > 0.0005, let card = cards.first(where: { $0.occurrence == z.cell && $0.layer >= 10 }) {
+            let view = Self.zoomCamera(on: card, amount: z.progress.amount, layout: layout)
+            frame.camera.offset = view.offset
+            frame.camera.target = view.target
+            frame.camera.focusDistance = view.distance + card.position.z * (1 - z.progress.amount)
+            // Closer in, the same lean moves the picture more, so it leans less.
+            push *= view.distance / view.rest
+        }
+        frame.camera.offset.z += push
+        frame.moodHints = moodHints(cards, camera: frame.camera, count: items.count)
         return frame
+    }
+
+    /// The camera moved in on `card` (`amount` 0 at rest … 1 in close): the card
+    /// fills a slide held up to be read, centred in the safe box. It dollies
+    /// straight in, evenly in scale, and never turns, so the grid stays square on.
+    static func zoomCamera(on card: CardPose, amount a: Float, layout: GridLayout)
+        -> (offset: SIMD3<Float>, target: SIMD3<Float>, distance: Float, rest: Float) {
+        let d = GridLayout.eyeDistance
+        let z = card.position.z
+        let rest = d - z
+        let big = layout.heroSize(aspect: card.size.x / max(card.size.y, 1e-5))
+        let near = min(max(card.size.y * d / max(big.y, 1e-5), 0.12), rest)
+        let r = expf(mix(logf(rest), logf(near), min(max(a, 0), 1)))
+        let centre = SIMD2(card.position.x, card.position.y)
+        let from = centre * d / rest
+        let q = from + (layout.safeCentre - from) * min(max(a, 0), 1)
+        let eye = centre - q * r / d
+        return (SIMD3(eye.x, eye.y, z + r - d), SIMD3(eye.x, eye.y, 0), r, rest)
+    }
+
+    /// The slides setting the room's colour, as the camera shows them: each by
+    /// its area on screen, nearer the middle counting for more, a card turned
+    /// away not at all. So the room follows a zoom or a slide out front.
+    func moodHints(_ cards: [CardPose], camera: StageCamera, count: Int) -> [MoodHint] {
+        let d = GridLayout.eyeDistance
+        let eye = SIMD3<Float>(0, 0, d) + camera.offset
+        var weights = [Float](repeating: 0, count: count)
+        for card in cards where card.opacity > 0.02 && !card.solid && card.media >= 0 && card.media < count {
+            let k = d / max(eye.z - card.position.z, 0.05)
+            let q = (SIMD2(card.position.x, card.position.y) - SIMD2(eye.x, eye.y)) * k / 0.33
+            let facing = max(0, cosf(card.rotation.x) * cosf(card.rotation.y))
+            weights[card.media] += expf(-(q.x * q.x + q.y * q.y)) * card.opacity * card.size.x * card.size.y * k * k * facing
+        }
+        return weights.indices.compactMap { weights[$0] > 1e-7 ? MoodHint(media: $0, weight: weights[$0]) : nil }
     }
 
     // MARK: Cells
 
+    /// The card a cell shows at `t`, or the pieces it is cut into while it
+    /// turns over, weaves or arrives; empty while it is off stage.
     func cell(_ c: Int, at t: Double, poseTime: Double, reverseBlend: Float, beat: Double, inhale: Float, focus: Float,
-              kick: Float, ctx: SceneContext) -> CardPose? {
+              kick: Float, ctx: SceneContext, moment: DropMoment? = nil, place: Placement? = nil, zoom: HeroProgress? = nil) -> [CardPose] {
         let s = settings
         let plan = self.plan
         let geometry = layout.cells[c]
@@ -220,8 +291,9 @@ public struct BeatScene: StageScene {
         var position = layout.place(SIMD3(geometry.centre.x + offset.x, geometry.centre.y + offset.y, 0))
         position.z += lift
 
-        // Turning over to a new slide.
-        if turn != 0 {
+        // Turning over to a new slide: a flip turns the card itself.
+        let turning = s.turn == .flip ? nil : plan.turnover(cell: c, at: t)
+        if turn != 0, turning == nil {
             let p = Ease.inOutCubic(abs(turn))
             rotation.y += (turn < 0 ? (1 - p) : -(1 - p)) * .pi / 2
         }
@@ -238,12 +310,172 @@ public struct BeatScene: StageScene {
         card.corner = corner(for: size)
         card.layer = L > 0.08 ? 1 : 0
 
-        // Arriving and leaving.
-        if let moved = entrance(card, c: c, geometry: geometry, at: poseTime, reverse: reverseBlend > 0, kick: kick, ctx: ctx, real: t) {
-            card = moved
-        } else {
-            return nil
+        // Other turns cut the card or lay one over it. They never meet the
+        // intro, the ending or a drop, so nothing else moves it meanwhile.
+        if let turning { return turnedOver(card, turning, ctx: ctx) }
+        if let m = moment {
+            if m.move == .weave { return weave(card, c: c, m, at: t, beat: beat) }
+            if m.move.reforms { card = reformed(card, c: c, m, place: place, at: t, inhale: inhale, grow: scale / max(rest.scale, 0.05)) }
         }
+        if let zoom { card = zoomed(card, geometry: geometry, amount: zoom.amount, kick: kick) }
+
+        // Arriving and leaving.
+        return entrance(card, c: c, geometry: geometry, at: poseTime, reverse: reverseBlend > 0, kick: kick, ctx: ctx, real: t)
+    }
+
+    /// Shows `slide` on `card`: its picture, shape and focal point.
+    func show(_ card: inout CardPose, _ slide: Int, ctx: SceneContext) {
+        let i = min(max(slide, 0), ctx.items.count - 1)
+        card.media = i
+        card.mediaAspect = ctx.items[i].aspect
+        card.focal = focal(i)
+    }
+
+    /// A cell part way through turning from one slide to the next, in the
+    /// chosen style; whole, as either slide, at each end.
+    func turnedOver(_ card: CardPose, _ turn: (from: Int, to: Int, progress: Float), ctx: SceneContext) -> [CardPose] {
+        var old = card, new = card
+        show(&old, turn.from, ctx: ctx)
+        show(&new, turn.to, ctx: ctx)
+        let q = min(max(turn.progress, 0), 1)
+        switch settings.turn {
+        case .flip:
+            return [card]
+        case .wipe:
+            // The new slide wipes across the old from the left, catching the light as it goes.
+            let e = Ease.inOutCubic(q)
+            if e <= 0.001 { return [old] }
+            if e >= 0.999 { return [new] }
+            new.reveal = e
+            new.glow += 0.2 * sinf(.pi * e)
+            return [old, new]
+        case .page:
+            // The old slide lifts from its right edge and turns away like a
+            // page, bending as paper does, over the new one.
+            let e = Ease.inOutCubic(q)
+            if e <= 0.001 { return [old] }
+            if e >= 0.999 { return [new] }
+            var page = Pieces.hinged(old, angle: -e * (.pi / 2 + 0.25))
+            page.flex = 0.55
+            page.curl = 0.6 * sinf(.pi * e)
+            page.opacity *= 1 - Ease.smooth((e - 0.82) / 0.18)
+            let under = 0.72 + 0.28 * e
+            new.color = SIMD4(new.color.x * under, new.color.y * under, new.color.z * under, new.color.w)
+            return [new, page]
+        case .blinds:
+            // Slats turn over one after another down the card, old face to new.
+            let k = Pieces.slats(card)
+            let lag = 0.5 / Float(k)
+            let olds = Pieces.strips(old, count: k), news = Pieces.strips(new, count: k)
+            return (0..<k).map { i in
+                let qi = min(max((q - Float(i) * lag) / (1 - Float(k - 1) * lag), 0), 1)
+                let a = Ease.inOutCubic(qi) * .pi
+                var slat = a < .pi / 2 ? olds[i] : news[i]
+                slat.rotation.x += a < .pi / 2 ? a : a - .pi
+                return slat
+            }
+        }
+    }
+
+    /// Threads a weave cuts a card into: about 10 px each at 1080, fewer on a big grid.
+    func threads(for card: CardPose) -> Int {
+        let k = Int((card.size.y / max(10 * layout.px, 1e-5)).rounded())
+        return max(min(k, 14, 640 / max(layout.count, 1)), 3)
+    }
+
+    /// A drop's weave: over the bar before, the card comes apart into threads
+    /// that slide apart and flutter; as the drop's light reaches it, they knit
+    /// back together with a snap. Whole before and after.
+    func weave(_ card: CardPose, c: Int, _ m: DropMoment, at t: Double, beat: Double) -> [CardPose] {
+        let period = plan.period
+        let knit = m.time + Double(c < dropOrder.count ? dropOrder[c] : 0) * period / 2
+        let rise = (m.start + period * 0.5, m.time - period * 0.25)
+        var tear: Float, pull: Float
+        if t < knit - 0.03 {
+            tear = 0.9 * Ease.inOutCubic(Float((t - rise.0) / max(rise.1 - rise.0, 1e-3)))
+            pull = tear
+        } else {
+            let p = Float((t - (knit - 0.03)) / (period * 0.45))
+            tear = 0.9 * (1 - Ease.outCubic(p))
+            pull = 0.9 * (1 - back(p, 1.6))
+        }
+        // Its shadow fades before it comes apart and returns once it is whole.
+        var whole = card
+        let away = smoothstep(Float(m.start), Float(m.start + period * 0.5), Float(t))
+            * (1 - smoothstep(Float(knit + period * 0.45), Float(knit + period * 1.2), Float(t)))
+        whole.shadow *= 1 - away
+        if tear < 0.002, abs(pull) < 0.002 { return [whole] }
+        let k = threads(for: card)
+        let h = card.size.y / Float(k)
+        return Pieces.strips(whole, count: k).enumerated().map { b, strip in
+            var piece = strip
+            let r = hash(c * 131 + b, 61)
+            let side: Float = b % 2 == 0 ? -1 : 1
+            let dx = side * (0.05 + 0.12 * r) * card.size.x * pull * abs(pull)
+            let dy = sinf(2 * .pi * Float(beat) * 0.5 + Float(b) * 0.9 + r * 6) * 0.3 * h * tear
+            piece.position += turned(SIMD3(dx, dy, 0.003 * r * tear), by: card.rotation)
+            piece.band = Pieces.thread(tear: tear, salt: hash(c * 53 + b, 67))
+            piece.shadow = 0
+            return piece
+        }
+    }
+
+    /// A card leaving its cell for the drop's shape: drawn in with the grid
+    /// over the breath before, out on the hit as the light reaches it, held
+    /// while the shape moves with the music, home together on the downbeat.
+    func reformed(_ card: CardPose, c: Int, _ m: DropMoment, place: Placement?, at t: Double, inhale: Float, grow: Float) -> CardPose {
+        var card = card
+        // Breathing in, the grid draws together; on the hit it lets go.
+        let draw = t < m.time ? 0.06 * inhale : 0.06 * (1 - Ease.outCubic(Float((t - m.time) / 0.12)))
+        if draw > 0.0001 {
+            let centre = layout.safeCentre
+            card.position.x = centre.x + (card.position.x - centre.x) * (1 - draw)
+            card.position.y = centre.y + (card.position.y - centre.y) * (1 - draw)
+            card.size *= 1 - draw / 2
+        }
+        guard t >= m.time, let place else { return card }
+        let go = m.time + Double(c < dropOrder.count ? dropOrder[c] : 0) * plan.period / 2
+        let a: Float = t < m.leave ? back(Float((t - go) / m.flyOut), 1.1) : 1 - Ease.place(Float((t - m.leave) / m.flyHome))
+        guard abs(a) > 0.0005 else { return card }
+        let a0 = min(max(a, 0), 1)
+        card.position = mix3(card.position, place.position, a)
+        card.position.z += 0.06 * sinf(.pi * a0)
+        card.rotation = mix3(card.rotation, place.rotation, a)
+        let own = SIMD2(place.width, place.width / max(card.mediaAspect, 0.05)) * grow
+        card.size = SIMD2(max(mix(card.size.x, own.x, a), 0.001), max(mix(card.size.y, own.y, a), 0.001))
+        let shade = mix(1, place.shade, a0)
+        card.color = SIMD4(card.color.x * shade, card.color.y * shade, card.color.z * shade, card.color.w)
+        card.opacity *= mix(1, place.opacity, a0)
+        card.shadow *= mix(1, place.shadow, a0)
+        card.blur += place.blur * a0
+        card.corner = corner(for: card.size)
+        card.layer = 2
+        return card
+    }
+
+    /// The featured card as the camera moves in on it: opened to its slide's
+    /// own shape inside its cell, lit, turned square on and lifted clear.
+    func zoomed(_ card: CardPose, geometry: GridLayout.Cell, amount a: Float, kick: Float) -> CardPose {
+        guard a > 0.0005 else { return card }
+        var card = card
+        let s = settings
+        let aspect = max(card.mediaAspect, 0.05)
+        let box = geometry.size
+        let own = aspect > box.x / max(box.y, 1e-5) ? SIMD2(box.x, box.x / aspect) : SIMD2(box.y * aspect, box.y)
+        let grow = 1 + 0.015 * kick * a
+        card.size = SIMD2(mix(card.size.x, own.x * grow, a), mix(card.size.y, own.y * grow, a))
+        card.position = mix3(card.position, layout.place(SIMD3(geometry.centre.x, geometry.centre.y, 0)) + SIMD3(0, 0, 0.02), a)
+        card.rotation *= 1 - a
+        let lit = max(s.lit.brightness, 1)
+        let target = SIMD4<Float>(lit * lit, lit * lit, lit * lit, 1)
+        card.color += (target - card.color) * a
+        card.saturation = mix(card.saturation, max(s.lit.colour, 1), a)
+        card.glow = mix(card.glow, s.lit.glow * 0.3, a)
+        card.blur *= 1 - a
+        card.opacity = mix(card.opacity, 1, a)
+        card.shadow = mix(card.shadow, max(s.lit.shadow, 1) * 1.4, a)
+        card.corner = corner(for: card.size)
+        card.layer = 10
         return card
     }
 
@@ -275,34 +507,35 @@ public struct BeatScene: StageScene {
 
     // MARK: Intro and outro
 
-    /// The card on its way in or out at `t`, or nil while it is off stage.
+    /// The card on its way in or out at `t`, in pieces for some entrances;
+    /// empty while it is off stage.
     func entrance(_ card: CardPose, c: Int, geometry: GridLayout.Cell, at t: Double, reverse: Bool, kick: Float,
-                  ctx: SceneContext, real: Double) -> CardPose? {
+                  ctx: SceneContext, real: Double) -> [CardPose] {
         let intro = plan.intro
         let outro = plan.outro
         // Close: leaving in reverse, the cover rising to hold the end.
         if outro.kind == .close, !reverse {
             if c == intro.coverCell, real > outro.coverRise {
                 let p = Float(min(1, (real - outro.coverRise) / outro.flight))
-                return coverHero(card, geometry: geometry, amount: Ease.place(p), kick: kick, push: Float((real - outro.coverRise) / 3), ctx: ctx)
+                return [coverHero(card, geometry: geometry, amount: Ease.place(p), kick: kick, push: Float((real - outro.coverRise) / 3), ctx: ctx)]
             }
             let leave = outro.leaves[c]
             if real >= leave {
                 let p = Float((real - leave) / outro.flight)
-                if p >= 1 { return nil }
+                if p >= 1 { return [] }
                 return flight(card, c: c, geometry: geometry, progress: 1 - p, ctx: ctx)
             }
         }
-        if t >= intro.end { return card }
+        if t >= intro.end { return [card] }
         if intro.coldOpen, c == intro.coverCell {
             // Frame 0 is the cover, large and lit; it goes back to its cell as the grid arrives.
             let p: Float = t < intro.coverMove ? 0 : Float((t - intro.coverMove) / max(intro.end - intro.coverMove, 1e-3))
-            return coverHero(card, geometry: geometry, amount: 1 - Ease.place(p), kick: kick, push: Float(t / max(intro.coverMove, 0.3)), ctx: ctx)
+            return [coverHero(card, geometry: geometry, amount: 1 - Ease.place(p), kick: kick, push: Float(t / max(intro.coverMove, 0.3)), ctx: ctx)]
         }
         let land = intro.landings[c]
         let begin = land - intro.flight
-        if t < begin { return nil }
-        if t >= land { return card }
+        if t < begin { return [] }
+        if t >= land { return [card] }
         return flight(card, c: c, geometry: geometry, progress: Float((t - begin) / intro.flight), ctx: ctx)
     }
 
@@ -330,8 +563,9 @@ public struct BeatScene: StageScene {
         return card
     }
 
-    /// A card in flight to its cell: 0 off stage, 1 landed.
-    func flight(_ card: CardPose, c: Int, geometry: GridLayout.Cell, progress p: Float, ctx: SceneContext) -> CardPose {
+    /// A card in flight to its cell, 0 off stage, 1 landed: whole, or in the
+    /// slats, threads or page some entrances cut it into.
+    func flight(_ card: CardPose, c: Int, geometry: GridLayout.Cell, progress p: Float, ctx: SceneContext) -> [CardPose] {
         var card = card
         let p = min(max(p, 0), 1)
         let target = card.position
@@ -379,8 +613,40 @@ public struct BeatScene: StageScene {
             card.reveal = Ease.inOutCubic(min(1, p * 1.2))
             card.foldPhase = 0
             fade(0.15)
+        case .blinds:
+            // Slats turn face on one after another, top to bottom.
+            let k = Pieces.slats(card)
+            let lag = 0.45 / Float(k)
+            return Pieces.strips(card, count: k).enumerated().map { i, strip in
+                var slat = strip
+                let q = min(max((p - Float(i) * lag) / (1 - Float(k - 1) * lag), 0), 1)
+                slat.rotation.x += (1 - back(q, 0.9)) * .pi / 2
+                slat.opacity *= min(1, q / 0.15)
+                return slat
+            }
+        case .page:
+            // Laid down from its left edge, bending as paper does on the way.
+            var page = Pieces.hinged(card, angle: -(1 - back(p, 0.5)) * .pi / 2)
+            page.flex = 0.55
+            page.curl = 0.5 * sinf(.pi * p) * (1 - p)
+            page.opacity *= min(1, p / 0.12)
+            return [page]
+        case .weave:
+            // Threads slide in from either side and knit together.
+            let k = threads(for: card)
+            return Pieces.strips(card, count: k).enumerated().map { b, strip in
+                var piece = strip
+                let r = hash(c * 131 + b, 71)
+                let q = min(max((p - r * 0.25) / 0.75, 0), 1)
+                let side: Float = b % 2 == 0 ? -1 : 1
+                piece.position += turned(SIMD3(side * (1 - back(q, 1.0)) * card.size.x * (0.7 + 0.5 * r), 0, 0), by: card.rotation)
+                piece.band = Pieces.thread(tear: 1 - Ease.smooth(q * 1.15), salt: hash(c * 53 + b, 73))
+                piece.opacity *= min(1, q / 0.2)
+                piece.shadow = 0
+                return piece
+            }
         }
-        return card
+        return [card]
     }
 
     // MARK: Feature moments
@@ -405,18 +671,21 @@ public struct BeatScene: StageScene {
         return HeroProgress(position: 1 - e, amount: 1 - Ease.smooth(p), lift: 1 - Ease.inOutCubic(max(0, p * 1.3 - 0.3)))
     }
 
-    func hero(slide: Int, from cell: Int?, progress p: HeroProgress, kick: Float, ctx: SceneContext, occurrence: Int) -> CardPose {
+    /// A slide out front. `presented` is its cell's card as the grid shows it
+    /// now (lit or resting, leaning, opened): it starts from exactly that.
+    func hero(slide: Int, from cell: Int?, presented: CardPose? = nil, progress p: HeroProgress, kick: Float, ctx: SceneContext,
+              occurrence: Int) -> CardPose {
         let aspect = ctx.items[slide].aspect
         let s = settings
         let spot = s.spotlight
         let big = layout.heroSize(aspect: aspect)
         let geometry = cell.map { layout.cells[$0] }
-        let home = geometry.map { layout.place(SIMD3($0.centre.x, $0.centre.y, 0)) } ?? layout.place(.zero)
-        let homeSize = geometry?.size ?? big * 0.3
+        let home = presented?.position ?? geometry.map { layout.place(SIMD3($0.centre.x, $0.centre.y, 0)) } ?? layout.place(.zero)
+        let homeSize = presented?.size ?? (geometry?.size ?? big * 0.3) * s.rest.scale
         // Worked out as the camera sees it, so lifting it towards the lens never
         // makes it bigger than planned: from its cell to the middle of the box,
         // centred across and kept inside it.
-        let homeSeen = SIMD2(home.x, home.y) * Self.seen(home.z), homeSizeSeen = homeSize * s.rest.scale * Self.seen(home.z)
+        let homeSeen = SIMD2(home.x, home.y) * Self.seen(home.z), homeSizeSeen = homeSize * Self.seen(home.z)
         var y = mix(homeSeen.y, layout.safeCentre.y, spot ? 0.85 : 0.6)
         let room = max(layout.safeSize.y / 2 - big.y / 2, 0)
         y = min(max(y, layout.safeCentre.y - room), layout.safeCentre.y + room)
@@ -426,16 +695,19 @@ public struct BeatScene: StageScene {
         let grow = 1 + 0.015 * kick * p.amount
         let size = (homeSizeSeen + (big - homeSizeSeen) * p.position) * grow / k
         var card = CardPose(media: slide, occurrence: occurrence, position: SIMD3(seen.x / k, seen.y / k, z),
-                            rotation: layout.wallRotation * (1 - p.amount), size: SIMD2(max(size.x, 0.001), max(size.y, 0.001)))
+                            rotation: (presented?.rotation ?? layout.wallRotation) * (1 - p.amount),
+                            size: SIMD2(max(size.x, 0.001), max(size.y, 0.001)))
         card.mediaAspect = aspect
         card.fit = .fill
         card.focal = focal(slide)
-        let b = mix(s.rest.brightness, max(s.lit.brightness, 1), p.amount)
-        card.color = SIMD4(SIMD3(repeating: powf(b, 2)), 1)
-        card.saturation = mix(s.rest.colour, max(s.lit.colour, 1), p.amount)
-        card.glow = s.lit.glow * 0.4 * p.amount
-        card.shadow = mix(s.rest.shadow, max(s.lit.shadow, 1) * 2, p.amount)
-        card.opacity = geometry == nil ? min(1, p.amount * 1.5) : 1
+        let b = max(s.lit.brightness, 1)
+        let from = presented?.color ?? SIMD4(SIMD3(repeating: powf(s.rest.brightness, 2)), 1)
+        card.color = from + (SIMD4(b * b, b * b, b * b, 1) - from) * p.amount
+        card.saturation = mix(presented?.saturation ?? s.rest.colour, max(s.lit.colour, 1), p.amount)
+        card.glow = mix(presented?.glow ?? 0, s.lit.glow * 0.4, p.amount)
+        card.shadow = mix(presented?.shadow ?? s.rest.shadow, max(s.lit.shadow, 1) * 2, p.amount)
+        card.blur = (presented?.blur ?? 0) * (1 - p.amount)
+        card.opacity = geometry == nil ? min(1, p.amount * 1.5) : mix(presented?.opacity ?? 1, 1, p.amount)
         card.corner = corner(for: card.size)
         card.layer = 10
         return card

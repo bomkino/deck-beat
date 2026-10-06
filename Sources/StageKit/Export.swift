@@ -137,7 +137,7 @@ public final class Exporter: @unchecked Sendable {
         let drift = look.cameraDrift
         let loop = comp.loopDuration
         // A title card pulls focus off the stage while it shows.
-        let pull = comp.overlay.map { $0.scrim > 0 ? $0.presence(at: t, loop: loop).alpha : 0 } ?? 0
+        let pull = comp.overlay.map { $0.scrim > 0 ? $0.strength(at: t, loop: loop) : 0 } ?? 0
         let defocus = pull * 0.022 * Float(output.height)
         try renderer.encode(cb, output: output, request: request, textures: comp.textures) { offset in
             var frame = scene.frame(at: t + Double(offset) * shutter, ctx)

@@ -39,6 +39,25 @@ public struct FeatureMoment: Sendable {
     public var end: Double
 }
 
+/// What happens on one drop, and for a grid that re-forms, when it comes home.
+public struct DropMoment: Sendable {
+    /// The downbeat of the drop.
+    public var time: Double
+    public var move: DropMove
+    /// How long the cards take to reach their shape, and to come home.
+    public var flyOut: Double
+    public var flyHome: Double
+    /// The downbeat the cards land back in their cells on.
+    public var home: Double
+    /// When the moment starts to show (the bar before the drop for a weave or
+    /// a shape) and when it has finished; nothing else is planned in between.
+    public var start: Double
+    public var end: Double
+
+    /// When the cards set off for home.
+    public var leave: Double { home - flyHome }
+}
+
 /// A cell turning over to show another slide; `time` is when it is edge-on.
 public struct Swap: Sendable {
     public var time: Double
@@ -93,6 +112,8 @@ public final class BeatPlan: @unchecked Sendable {
     public let peaks: [[Float]]
     /// In scene time.
     public let drops: [Double]
+    /// What each drop does, in the same order.
+    public let moments: [DropMoment]
     public let punches: [(time: Double, amount: Float)]
     /// The kick, 0…1 at `rate`, for the backdrop and the cover.
     public let pulse: [Float]
@@ -106,8 +127,8 @@ public final class BeatPlan: @unchecked Sendable {
 
     init(start: Double, length: Double, period: Double, cells: Int, slides: Int, triggers: [[Trigger]], reach: Double, attack: Double,
          features: [FeatureMoment], firstSlide: [Int], swaps: [[Swap]], flipTime: Double, levels: [[Float]], peaks: [[Float]],
-         drops: [Double], punches: [(time: Double, amount: Float)], pulse: [Float], loud: [Float], intro: IntroPlan, outro: OutroPlan,
-         beats: [Double], downbeats: [Double]) {
+         drops: [Double], moments: [DropMoment], punches: [(time: Double, amount: Float)], pulse: [Float], loud: [Float], intro: IntroPlan,
+         outro: OutroPlan, beats: [Double], downbeats: [Double]) {
         self.start = start
         self.length = length
         self.period = period
@@ -123,6 +144,7 @@ public final class BeatPlan: @unchecked Sendable {
         self.levels = levels
         self.peaks = peaks
         self.drops = drops
+        self.moments = moments
         self.punches = punches
         self.pulse = pulse
         self.loud = loud
@@ -203,6 +225,24 @@ public final class BeatPlan: @unchecked Sendable {
             if d < -flipTime { break }
         }
         return (slide, turn)
+    }
+
+    /// A turn in progress on a cell at `t`: the slide it leaves, the one it
+    /// turns to, and how far through the turn it is (0…1, halfway when edge-on).
+    public func turnover(cell: Int, at t: Double) -> (from: Int, to: Int, progress: Float)? {
+        var slide = firstSlide[cell]
+        for s in swaps[cell] {
+            let d = t - s.time
+            if abs(d) < flipTime / 2 { return (slide, s.slide, Float((d + flipTime / 2) / flipTime)) }
+            if d < 0 { break }
+            slide = s.slide
+        }
+        return nil
+    }
+
+    /// The drop whose weave or shape is showing at `t`, if any.
+    public func moment(at t: Double) -> DropMoment? {
+        moments.first { $0.move != .light && t >= $0.start && t <= $0.end }
     }
 
     /// Position in beats since the clip began (fractional), for idle motion.
@@ -424,6 +464,30 @@ public enum Choreographer {
 
         // MARK: Drops and the mode's gain over the clip
         let drops = s.drops ? song.drops.map { $0 - start }.filter { $0 > introEnd + bar * 0.5 && $0 < outroStart - period } : []
+        // What each drop does. A weave needs the whole bar before it clear of
+        // the intro; a shape needs to be home a bar later (two, for a quick
+        // bar) before the ending or the next drop. Otherwise it lights.
+        var moments: [DropMoment] = []
+        for (i, d) in drops.enumerated() {
+            var move = s.dropMove
+            let flyOut = min(max(period * 0.9, 0.3), 0.6), flyHome = flyOut * 1.15
+            var home = d + period
+            let next = i + 1 < drops.count ? drops[i + 1] : Double.infinity
+            if move != .light, d - bar < introEnd + 0.05 { move = .light }
+            if move.reforms {
+                let target = d + Double(bar >= 1.8 ? 1 : 2) * bar
+                home = downbeats.first(where: { $0 > target - period * 0.5 }) ?? target
+                if home + period * 2 > outroStart || home + period > next - bar { move = .light }
+            }
+            let window: (Double, Double)
+            switch move {
+            case .light: window = (d - period, d + period)
+            case .weave: window = (d - bar, d + period * 2)
+            default: window = (d - bar, home + period)
+            }
+            if move.reforms == false { home = d + period }
+            moments.append(DropMoment(time: d, move: move, flyOut: flyOut, flyHome: flyHome, home: home, start: window.0, end: window.1))
+        }
         func modeGain(_ t: Double) -> Float {
             var g: Float = 1
             let rampIn = introEnd * 0.25
@@ -746,6 +810,10 @@ public enum Choreographer {
                 add(c, d + Double(dropOrder[c]) * sixteenth * 2, 1, hold: period * 0.5, release: release * 1.5)
             }
         }
+        // A grid coming home lands lit, on the downbeat.
+        for m in moments where m.move.reforms {
+            for c in 0..<n { add(c, m.home, 0.75, hold: period * 0.25, release: release) }
+        }
         for c in 0..<n { cellsTriggers[c].sort { $0.time < $1.time } }
 
         // MARK: Equaliser levels
@@ -800,7 +868,7 @@ public enum Choreographer {
                 let holdUntil = s.spotlight ? max(d + Double(every) * bar - period, d + 1.8) : d + (bar < 1.8 ? bar * 2 : bar)
                 let end = holdUntil + period * 0.5
                 guard liftOff > introEnd + 0.05, end < outroStart - 0.1 else { if d > outroStart { break } else { continue } }
-                if drops.contains(where: { $0 > liftOff - period && $0 < end + period }) { continue }
+                if moments.contains(where: { liftOff < $0.end && end > $0.start }) { continue }
                 features.append(FeatureMoment(slide: featureQueue[nextFeature % featureQueue.count], cell: nil, liftOff: liftOff,
                                               land: d, leave: holdUntil, end: end))
                 nextFeature += 1
@@ -822,6 +890,8 @@ public enum Choreographer {
                 let d = downbeat(barsAfterFirst: k)
                 k += 1
                 guard d < outroStart - bar else { break }
+                // A weave or a shape keeps every card as it is until it is home.
+                if moments.contains(where: { $0.move != .light && d > $0.start - bar * 0.5 && d < $0.end + flipTime }) { continue }
                 let count = min(perBar, slideCount - n)
                 // A slide out front comes back to the card it left, and is not dealt onto another meanwhile.
                 let featured = Set(features.filter { $0.liftOff < d + 1 && $0.end > d - 0.2 }.map(\.slide))
@@ -843,14 +913,15 @@ public enum Choreographer {
                 }
             }
         }
-        // A featured slide that is on the grid steps out of its own cell.
+        // A featured slide that is on the grid steps out of its own cell; when
+        // a small deck shows it twice, out of the copy nearest the middle.
         for i in features.indices {
             let f = features[i]
-            features[i].cell = (0..<n).first { c in
+            features[i].cell = (0..<n).filter { c in
                 var slide = first[c]
                 for w in swaps[c] where w.time <= f.liftOff { slide = w.slide }
                 return slide == f.slide && !swaps[c].contains { $0.time > f.liftOff - 1 && $0.time < f.end + flipTime }
-            }
+            }.min { (simdLength(layout.cells[$0].centre), $0) < (simdLength(layout.cells[$1].centre), $1) }
         }
 
         // MARK: Camera punches: loud downbeats, harder on drops
@@ -862,13 +933,14 @@ public enum Choreographer {
             if mean > 0.6 { punches.append((d, 0.015)) }
         }
         for d in drops { punches.removeAll { abs($0.time - d) < 0.1 }; punches.append((d, 0.03)) }
+        for m in moments where m.move.reforms { punches.removeAll { abs($0.time - m.home) < 0.1 }; punches.append((m.home, 0.02)) }
         punches.sort { $0.time < $1.time }
 
         let reach = max(release, (cellsTriggers.flatMap { $0 }.map(\.release).max() ?? release)) * 1.6 +
             (cellsTriggers.flatMap { $0 }.map(\.hold).max() ?? 0)
         return BeatPlan(start: start, length: length, period: period, cells: n, slides: slideCount, triggers: cellsTriggers,
                         reach: reach, attack: max(s.motion.attack, 0.001), features: features, firstSlide: first, swaps: swaps,
-                        flipTime: flipTime, levels: levels, peaks: peaks, drops: drops, punches: punches, pulse: pulse, loud: loud,
+                        flipTime: flipTime, levels: levels, peaks: peaks, drops: drops, moments: moments, punches: punches, pulse: pulse, loud: loud,
                         intro: intro, outro: outro, beats: beatTimes, downbeats: downbeats)
     }
 

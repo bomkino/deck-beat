@@ -1,6 +1,20 @@
 # Changelog
 
-## 2.0.0 (unreleased)
+## 3.0.0 (2026-10-06)
+
+The first public release, with everything from 1.0 and 2.0 below. New in 3.0: drops that re-form the grid, a zoom on a featured slide, new ways to turn over, a room that takes the slides' colour, words that land on the beat, and updates that install themselves.
+
+- Drops: besides lighting from the middle out, a drop can *weave* (each slide comes apart into threads over the bar before and knits back on the hit), or break the grid into a *tunnel*, a *fan* like a hand of cards, or a *strip* that steps along on every beat, coming home on a later downbeat. A drop too close to the intro, the ending or the next drop falls back to lighting up.
+- A featured slide can be zoomed into where it hangs, the camera moving straight in and the grid falling away round the edges, inside the safe area for every canvas and slide shape. A slide that steps out now starts from its cell exactly as shown.
+- Cells turn over as blinds, a wipe or a page, as well as a flip. The intro gains Blinds, Page and Weave entrances.
+- *Slide colour*: the room leans towards the colours of the slides in view, as the camera sees them, so it follows a zoom or a slide out front.
+- *Words land on the beat*: the line above lands first, then the title a few words at a time, each falling onto a beat (half beats when there are more words than beats). A looping caption lifts them off in reverse before the loop turns. Title lines are balanced, so a title never ends on one stray word.
+- The seven Looks use the new moves: Screening Room zooms and fans, Ripple opens a tunnel, Read-through lays slides down like pages and runs them past as a strip, Equaliser weaves, Gallery Wall walks up to each slide, Night Shift and Light Box turn over as blinds.
+- In-app updates with Sparkle: Deck Beat checks this repository's latest release once a day and on *Check for Updates…*, and installs an update only when it is signed with pitch.dog's update key. This version has to be installed by hand once; later versions arrive by themselves.
+- Projects from 1.0 and 2.0 open with the moves they had.
+- `beat-lab`: seven new checks (every drop move, turn and feature style on small and large decks, the loop seam, the zoom inside the frame and the safe area, words on the beat, restraint round the new drops, and 2.0 projects in 3.0) and two sheets of the new moves. CI captures each move in a 1080×1920 Reel with 2576×1080 and 1920×1080 slides, and proves an update end to end with a throwaway key.
+
+## 2.0.0 (not released on its own)
 
 Made for wide decks in tall videos, and faster.
 
@@ -16,7 +30,7 @@ Made for wide decks in tall videos, and faster.
 - Faster: planning a 12×20 grid takes 3–7 ms instead of 33–41 ms on the same machine, plans and compositions are remembered between frames, Look previews are worked out off the main thread, flat cards draw as two triangles, and export encodes the next frame while the GPU draws the last.
 - `beat-lab bench`, wide-deck contact sheets, export timings and nine new checks.
 
-## 1.0.0 (unreleased)
+## 1.0.0 (not released on its own)
 
 The first version of Deck Beat.
 

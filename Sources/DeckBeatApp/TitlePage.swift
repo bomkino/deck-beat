@@ -45,6 +45,14 @@ struct TitlePage: View {
                     Text("Ink").textStyle(.bodyCompact).foregroundStyle(.secondary)
                     ChoiceRow(ReelTitle.Ink.allCases.map { ($0, $0.title) }, selection: choice(\.ink, "Title Ink"))
                 }
+                Toggle(isOn: Binding(get: { title.beat }, set: { v in
+                    session.setTitle("Words on the Beat") { $0.beat = v }
+                    revealIfHidden()
+                })) {
+                    Text("Words land on the beat").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                }
+                .toggleStyle(.switch).controlSize(.mini)
+                .help("The line above lands first, then the title a few words at a time, each on a beat")
                 Text(note(title)).textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -116,6 +124,11 @@ struct TitlePage: View {
         case .closing: parts.append("It rises in a few seconds before the end, like an end card, and clears as the loop turns.")
         case .throughout:
             if title.placement == .corner { parts.append("The grid moves over to make room for it.") }
+        }
+        if title.beat {
+            parts.append(title.timing == .throughout
+                ? "Its words land on the beat once the grid is in, and a loop lifts them off again before it turns."
+                : "Its words land on the beat, a few at a time.")
         }
         let words = title.text.split(whereSeparator: { $0.isWhitespace }).count
         let most = TitleArt.maxWords(title.placement)

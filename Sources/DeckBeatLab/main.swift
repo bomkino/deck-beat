@@ -13,8 +13,8 @@ import UniformTypeIdentifiers
 //
 //   beat-lab check                 song analysis, layout, plans and scenes, on the CPU
 //   beat-lab bench                 how long listening and planning take, on the CPU
-//   beat-lab render --out <dir>    contact sheets of every Look and of wide decks, a demo
-//                                  clip with sound, and export timings old and new
+//   beat-lab render --out <dir>    contact sheets of every Look, of wide decks and of the 3.0
+//                                  moves, a demo clip with sound, and export timings old and new
 
 let usage = "usage: beat-lab check | beat-lab bench | beat-lab render --out <dir>"
 let args = Array(CommandLine.arguments.dropFirst())
@@ -59,6 +59,7 @@ enum Render {
                      song.analysis.drops.map { String(format: "%.2f", $0) }.joined(separator: ", ") as NSString, song.duration))
         let slides = (0..<DemoDeck.count).map { DemoDeck.slide(index: $0) }
         let media = try slides.map { try MediaLoader.texture(from: $0) }
+        let palettes = slides.map { Palette.extract(from: [$0], name: "") }
         let exporter = try Exporter()
 
         // The contact sheet: a column per Look, a row per moment.
@@ -70,7 +71,7 @@ enum Render {
         sheet.setFillColor(CGColor(gray: 0.06, alpha: 1))
         sheet.fill(CGRect(x: 0, y: 0, width: sheet.width, height: sheet.height))
         for (column, look) in looks.enumerated() {
-            let made = compose(look, song: song, media: media, clip: Clip(length: .s30), aspect: Float(tile.w) / Float(tile.h))
+            let made = compose(look, song: song, media: media, clip: Clip(length: .s30), aspect: Float(tile.w) / Float(tile.h), palettes: palettes)
             let plan = made.plan
             let groove = plan.features.first.map { $0.land + 0.3 } ?? min(plan.intro.end + 4 * plan.period * 2, plan.length * 0.4)
             let drop = plan.drops.first.map { $0 + 0.12 } ?? plan.length * 0.6
@@ -89,7 +90,7 @@ enum Render {
         let sheetURL = dir.appendingPathComponent("contact-sheet.png")
         try ImageOutput.writePNG(sheetImage, to: sheetURL)
         print(String(format: "wrote %@ in %.1f s", sheetURL.lastPathComponent as NSString, Date().timeIntervalSince(t0)))
-        let wideSheets = try WideDecks.render(song: song, exporter: exporter, to: dir)
+        let wideSheets = try WideDecks.render(song: song, exporter: exporter, to: dir) + NewMoves.render(song: song, exporter: exporter, to: dir)
 
         // A 15-second clip of the default Look in the Reel frame, with its sound.
         let t1 = Date()
@@ -135,9 +136,11 @@ enum Render {
 
     /// The composition the app would make for `look` with the demo deck and groove.
     static func compose(_ look: Look, song: Song, media: [MediaTexture], clip: Clip, aspect: Float,
-                        grid: ((GridSettings) -> GridSettings)? = nil, title: ReelTitle? = nil, canvas: (w: Int, h: Int) = (1080, 1920)) -> Made {
+                        grid: ((GridSettings) -> GridSettings)? = nil, title: ReelTitle? = nil, canvas: (w: Int, h: Int) = (1080, 1920),
+                        palettes: [Palette?] = [], tweak: ((inout BeatSettings) -> Void)? = nil) -> Made {
         var settings = Looks.settings(look, over: BeatSettings())
         if let grid { settings.grid = grid(settings.grid) }
+        tweak?(&settings)
         let aspects = media.map(\.aspect)
         let range = clip.resolve(song.analysis, settings: settings)
         var clear = Clearance.none
@@ -149,7 +152,8 @@ enum Render {
                                            slideAspect: Composer.typicalAspect(aspects), slides: media.count, clear: clear)
         var comp = Composer.composition(plan: plan, layout: layout, settings: settings, stage: look.stage, backdrop: look.backdrop(nil),
                                         textures: media.map(\.texture), aspects: aspects, canvasAspect: aspect)
-        if let title { comp.overlay = TitleArt.overlay(title, light: true) }
+        if let title { comp.overlay = TitleArt.overlay(title, light: true, cues: WordTiming.cues(title, plan: plan)) }
+        comp.itemPalettes = palettes
         return Made(clip: range, plan: plan, layout: layout, composition: comp)
     }
 

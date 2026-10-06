@@ -4,3 +4,6 @@
 DerivedData/
 .DS_Store
 /dist/
+/lab/
+/lab-output/
+/release-out/

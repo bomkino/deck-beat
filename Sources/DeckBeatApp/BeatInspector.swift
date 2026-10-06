@@ -119,6 +119,17 @@ struct BeatPage: View {
                 }
             }
             Hairline().padding(.horizontal, 16)
+            InspectorSection("Moves") {
+                VStack(alignment: .leading, spacing: 10) {
+                    r.choice("On the drop", \.settings.dropMove, DropMove.allCases.map { ($0, $0.title) })
+                    Text(s.dropMove.summary).textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                    if s.feature != .off {
+                        r.choice("A slide comes forward by", \.settings.featureStyle, FeatureStyle.allCases.map { ($0, $0.title) })
+                    }
+                    r.choice("Cells turn over by", \.settings.turn, TurnStyle.allCases.map { ($0, $0.title) })
+                }
+            }
+            Hairline().padding(.horizontal, 16)
             SongBeatSection(session: session)
             Hairline().padding(.horizontal, 16)
             InspectorSection("Slides") {
@@ -556,7 +567,10 @@ struct StagePage: View {
                 VStack(spacing: 4) {
                     r.slider("Brightness", \.backdrop.brightness, 0.2...1.4, reset: 1)
                     r.slider("Motion", \.backdrop.motion, reset: 0.3)
+                    r.slider("Slide colour", \.stage.mood, reset: 0.5)
                 }
+                Text("Slide colour: how far the room takes on the colours of the slides in view, so it warms or cools as a slide comes forward.")
+                    .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
             Hairline().padding(.horizontal, 16)
             InspectorSection("Atmosphere") {

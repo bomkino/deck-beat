@@ -306,7 +306,10 @@ struct SongCard: View {
 /// or `--snapshot window.png` for the whole window. `--deck wide|hd [--slides 20]`
 /// drops in a deck of 2576 × 1080 or 1920 × 1080 slides first, through the
 /// same import as a drop; `--page grid` opens an inspector page; `--title
-/// "words" [--caption]` sets a title card, or a caption shown throughout.
+/// "words" [--caption] [--beat-words]` sets a title card, or a caption shown
+/// throughout, its words landing on the beat if asked. `--drop fan`,
+/// `--feature zoom`, `--turn blinds`, `--entrance page` and `--room 0.8` try
+/// the moves, and `--grid 3x5` sets the grid by hand; `--time drop:0.4` times the still from a moment of the plan.
 struct BeatSnapshotHost: ViewModifier {
     let session: BeatSession
     @State private var still: CGImage?
@@ -344,6 +347,7 @@ struct BeatSnapshotHost: ViewModifier {
                 t.kicker = StudioSnapshot.arg("--kicker") ?? ""
                 t.placement = caption ? .corner : .centre
                 t.timing = caption ? .throughout : .opening
+                t.beat = CommandLine.arguments.contains("--beat-words")
             }
         }
         if let id = StudioSnapshot.arg("--look") { session.choose(Looks.look(id)) }
@@ -351,9 +355,27 @@ struct BeatSnapshotHost: ViewModifier {
             session.setFormat(f)
         }
         if let m = StudioSnapshot.arg("--mode"), let mode = BeatMode(rawValue: m) { session.update("Mode") { $0.settings.mode = mode } }
+        if let v = StudioSnapshot.arg("--drop").flatMap(DropMove.init(rawValue:)) { session.update("Drop") { $0.settings.dropMove = v } }
+        if let v = StudioSnapshot.arg("--feature").flatMap(FeatureStyle.init(rawValue:)) {
+            session.update("Feature") { p in
+                p.settings.featureStyle = v
+                if p.settings.feature == .off { p.settings.feature = .twoBars }
+            }
+        }
+        if let v = StudioSnapshot.arg("--turn").flatMap(TurnStyle.init(rawValue:)) {
+            session.update("Turn") { p in
+                p.settings.turn = v
+                p.settings.grid.rotate = true
+            }
+        }
+        if let v = StudioSnapshot.arg("--entrance").flatMap(Entrance.init(rawValue:)) { session.update("Entrance") { $0.settings.intro.entrance = v } }
+        if let v = StudioSnapshot.arg("--room").flatMap(Float.init) { session.update("Room") { $0.stage.mood = v } }
+        if let g = StudioSnapshot.arg("--grid")?.split(separator: "x").compactMap({ Int($0) }), g.count == 2 {
+            session.setGrid(columns: g[0], rows: g[1])
+        }
         if let c = StudioSnapshot.arg("--clip").flatMap(Int.init).flatMap(ClipLength.init(rawValue:)) { session.setClip(c) }
         session.clock.playing = false
-        session.clock.time = Double(StudioSnapshot.arg("--time") ?? "") ?? 3
+        session.clock.time = Self.time(StudioSnapshot.arg("--time"), session: session) ?? 3
         StudioSnapshot.sizeWindow()
         let f = session.project.format
         if let layout = session.planned(for: f)?.layout {
@@ -384,6 +406,34 @@ struct BeatSnapshotHost: ViewModifier {
 }
 
 extension BeatSnapshotHost {
+    /// A still's time: seconds, or seconds after a moment of the plan, as
+    /// `drop:0.4` (the first drop), `home:0.2` (a re-formed grid landing home),
+    /// `feature:0.3` (the first slide forward, once there), `swap:0` (the
+    /// first cell edge-on as it turns over) or `word:1` (the second group of
+    /// title words landing).
+    @MainActor
+    static func time(_ spec: String?, session: BeatSession) -> Double? {
+        guard let spec else { return nil }
+        if let t = Double(spec) { return t }
+        let parts = spec.split(separator: ":")
+        guard parts.count == 2, let plan = session.planned(for: session.project.format)?.plan else { return nil }
+        let after = Double(parts[1]) ?? 0
+        switch parts[0] {
+        case "drop": return plan.drops.first.map { $0 + after }
+        case "home": return plan.moments.first(where: { $0.move.reforms }).map { $0.home + after }
+        case "feature": return plan.features.first.map { $0.land + after }
+        case "swap":
+            let first = plan.swaps.flatMap { $0 }.map(\.time).filter { $0 > plan.intro.end }.min()
+            return first.map { $0 + after }
+        case "word":
+            guard let title = session.project.title else { return nil }
+            let cues = WordTiming.cues(title, plan: plan)
+            let i = Int(parts[1]) ?? 0
+            return cues.indices.contains(i) ? cues[i].land + 0.03 : nil
+        default: return nil
+        }
+    }
+
     /// The sample deck drawn at 2576 × 1080 (`wide`) or 1920 × 1080 (`hd`), as PNG files to drop in.
     static func writeDeck(_ kind: String, count: Int) -> [URL] {
         let size = kind == "hd" ? (w: 1920, h: 1080) : (w: 2576, h: 1080)
