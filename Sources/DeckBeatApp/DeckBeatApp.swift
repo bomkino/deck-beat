@@ -88,6 +88,9 @@ struct BeatProject: Codable, Hashable {
     var beat = BeatFix.none
     /// Words over the video: a caption or a title card.
     var title: ReelTitle?
+    /// Exports leave the backdrop out where the format can (ProRes 4444, HEVC,
+    /// PNG); the stage shows a checkerboard in its place.
+    var transparent = false
 
     init(backdrop: BackdropSettings, stage: StageLook) {
         self.backdrop = backdrop
@@ -99,8 +102,13 @@ struct BeatProject: Codable, Hashable {
         var p = BeatProject(backdrop: look.backdrop(nil), stage: look.stage)
         p.settings = Looks.settings(look, over: BeatSettings())
         p.gridFollowsDeck = true
+        // New documents start the way the last one was set.
+        p.transparent = UserDefaults.standard.bool(forKey: BeatProject.transparentKey)
         return p
     }
+
+    /// Where the last Background choice is kept, as the start for new documents.
+    static let transparentKey = "background.transparent"
 
     /// Reads any version: whatever the file leaves out, or this version
     /// cannot read, takes its default rather than failing the project.
@@ -124,6 +132,7 @@ struct BeatProject: Codable, Hashable {
         c.update(&gridFollowsDeck, .gridFollowsDeck)
         c.update(&beat, .beat)
         c.update(&title, .title)
+        c.update(&transparent, .transparent)
     }
 }
 

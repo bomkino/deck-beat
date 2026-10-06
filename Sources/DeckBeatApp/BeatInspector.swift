@@ -251,6 +251,8 @@ struct LookCard: View {
         h.combine(session.project.settings.grid)
         h.combine(session.project.clip)
         h.combine(session.project.beat)
+        // A transparent project's cards show over a checkerboard.
+        h.combine(session.project.transparent)
         return "look|\(h.finalize())"
     }
 
@@ -364,6 +366,10 @@ struct GridPage: View {
                     r.choice("Margins", \.settings.grid.margins, Margins.allCases.map { ($0, $0.title) })
                     r.choice("Wall", \.settings.grid.wall, [(Wall.flat, "Flat"), (Wall.lean, "Lean"), (Wall.angle, "Angle")])
                     r.slider("Mirror floor", \.settings.grid.wall.reflection, 0...0.5, reset: 0)
+                    if session.project.transparent, g.wall.reflection > 0.001 {
+                        Text("Left out while the background is transparent (Stage › Background).")
+                            .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             Hairline().padding(.horizontal, 16)
@@ -539,7 +545,17 @@ struct StagePage: View {
     var body: some View {
         let r = Rows(session: session)
         let b = session.project.backdrop
+        let clear = session.transparentBackground
         VStack(spacing: 0) {
+            InspectorSection("Background") {
+                ChoiceRow([(false, "Backdrop"), (true, "Transparent")], selection: Binding(
+                    get: { session.transparentBackground }, set: { session.setTransparentBackground($0) }))
+                Text(clear
+                     ? "ProRes 4444, HEVC and PNG exports leave the backdrop out and keep the shadows; the stage shows a checkerboard in its place. MP4 and ProRes 422 still draw the backdrop below. The vignette and mirror floor are left out, and a title card dims the grid less."
+                     : "Transparent leaves the backdrop out of ProRes 4444, HEVC and PNG exports, for laying the grid over other footage.")
+                    .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+            }
+            Hairline().padding(.horizontal, 16)
             InspectorSection("Backdrop") {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                     ForEach(Self.backdrops, id: \.self) { id in
@@ -566,16 +582,21 @@ struct StagePage: View {
                 .toggleStyle(.switch).controlSize(.mini)
                 VStack(spacing: 4) {
                     r.slider("Brightness", \.backdrop.brightness, 0.2...1.4, reset: 1)
-                    r.slider("Motion", \.backdrop.motion, reset: 0.3)
+                    // Some styles move on their own, with nothing for a Motion slider to change.
+                    if b.styleInfo.labels.motion != nil {
+                        r.slider("Motion", \.backdrop.motion, reset: 0.3)
+                    }
                     r.slider("Slide colour", \.stage.mood, reset: 0.5)
                 }
-                Text("Slide colour: how far the room takes on the colours of the slides in view, so it warms or cools as a slide comes forward.")
+                Text("Slide colour: how far the backdrop takes on the colours of the slides in view, so it warms or cools as a slide comes forward."
+                     + (clear ? " A transparent export has no backdrop, so it shows only in MP4 and ProRes 422." : ""))
                     .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
             Hairline().padding(.horizontal, 16)
             InspectorSection("Atmosphere") {
                 r.slider("Amount", \.settings.atmosphere, reset: 0.5)
-                Text("How much the room answers the song: the backdrop lifts on the kick, the camera leans in on loud bars, the light flares on a drop.")
+                Text("How much the room answers the song: the backdrop lifts on the kick, the camera leans in on loud bars, the light flares on a drop."
+                     + (clear ? " With the backdrop left out, the camera and the light still answer." : ""))
                     .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
             Hairline().padding(.horizontal, 16)

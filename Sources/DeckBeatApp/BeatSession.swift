@@ -139,6 +139,29 @@ final class BeatSession: StageSource {
     var exportName: String { "Deck Beat " + look.name }
     var soundTitle: String? { song?.title }
 
+    // MARK: Background
+
+    var transparentBackground: Bool { project.transparent }
+
+    /// Backdrop or transparent, for this project and, as a starting point, the next new one.
+    func setTransparentBackground(_ on: Bool) {
+        guard on != transparentBackground else { return }
+        update(on ? "Transparent Background" : "Backdrop") { $0.transparent = on }
+        UserDefaults.standard.set(on, forKey: BeatProject.transparentKey)
+    }
+
+    /// The stage holds still under the export sheet, so the export has the GPU to itself.
+    var stageSuspended: Bool { showExport }
+
+    /// What an export still waits for, or nil once the song and every slide are in.
+    var exportWaitNote: String? {
+        if isReady { return nil }
+        if song == nil { return "Listening to the song…" }
+        if project.slides.isEmpty { return preparingSamples ? "Setting out the slides…" : "Add slides to export a video." }
+        let waiting = max(importing, 1)
+        return "Waiting for \(waiting) slide\(waiting == 1 ? "" : "s") to load…"
+    }
+
     var loopDuration: Double { loopDuration(for: project.format) }
 
     func loopDuration(for format: CanvasFormat) -> Double {
@@ -263,11 +286,15 @@ final class BeatSession: StageSource {
         for (i, item) in p.slides.enumerated() where item.kind == .video {
             if let d = clipDurations[item.id], d > 0 { videos[i] = VideoClip(url: document.media.url(for: item.file), duration: d) }
         }
-        var comp = Composer.composition(plan: planned.plan, layout: planned.layout, settings: p.settings, stage: p.stage,
+        var settings = p.settings
+        // Over someone else's footage a mirror floor would hang below the grid in mid-air.
+        if p.transparent { settings.grid.wall.reflection = 0 }
+        var comp = Composer.composition(plan: planned.plan, layout: planned.layout, settings: settings, stage: p.stage,
                                         backdrop: p.backdrop, textures: textures, aspects: aspects, focals: p.slides.map(\.focal),
                                         canvasAspect: Float(format.aspect), videos: videos, modulate: planned.modulate)
         comp.overlay = titleOverlay(p, plan: planned.plan)
         comp.itemPalettes = p.slides.map { slidePalettes[$0.id] }
+        comp.transparent = p.transparent
         return comp
     }
 
@@ -279,14 +306,19 @@ final class BeatSession: StageSource {
         switch title.ink {
         case .light: return true
         case .dark: return false
-        case .auto: return title.placement == .centre || p.backdrop.palette.meanLightness * min(p.backdrop.brightness, 1.2) < 0.62
+        // Over footage nobody here can see, light ink with its shadow is the safe choice.
+        case .auto: return title.placement == .centre || p.transparent
+            || p.backdrop.palette.meanLightness * min(p.backdrop.brightness, 1.2) < 0.62
         }
     }
 
     /// The title over a composition of `p`, its words landing on the beats of `plan` when asked.
     func titleOverlay(_ p: BeatProject, plan: BeatPlan) -> TitleOverlay? {
         guard let title = p.title else { return nil }
-        return TitleArt.overlay(title, light: titleIsLight(p), cues: WordTiming.cues(title, plan: plan))
+        var overlay = TitleArt.overlay(title, light: titleIsLight(p), cues: WordTiming.cues(title, plan: plan))
+        // A title card's dimming is a black veil over the footage below; half of it still sets the words apart.
+        if p.transparent { overlay?.scrim *= 0.5 }
+        return overlay
     }
 
     func setTitle(_ name: String, _ change: (inout ReelTitle) -> Void) {

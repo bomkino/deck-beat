@@ -310,6 +310,7 @@ struct SongCard: View {
 /// throughout, its words landing on the beat if asked. `--drop fan`,
 /// `--feature zoom`, `--turn blinds`, `--entrance page` and `--room 0.8` try
 /// the moves, and `--grid 3x5` sets the grid by hand; `--time drop:0.4` times the still from a moment of the plan.
+/// `--background transparent` leaves the backdrop out (the still shows a checkerboard in its place).
 struct BeatSnapshotHost: ViewModifier {
     let session: BeatSession
     @State private var still: CGImage?
@@ -340,6 +341,8 @@ struct BeatSnapshotHost: ViewModifier {
             return
         }
         if let page = StudioSnapshot.arg("--page") { UserDefaults.standard.set(page, forKey: "inspectorPage") }
+        // Set every run, so a headless run never takes the last document's Background.
+        session.update("Background") { $0.transparent = StudioSnapshot.arg("--background") == "transparent" }
         if let words = StudioSnapshot.arg("--title") {
             let caption = CommandLine.arguments.contains("--caption")
             session.setTitle("Title") { t in
@@ -384,7 +387,9 @@ struct BeatSnapshotHost: ViewModifier {
                          session.slideAspect, layout.columns, layout.rows, layout.shape.rawValue as NSString, cell.x, cell.y, layout.crop * 100))
         }
         if let comp = session.composition() {
-            still = try? Exporter().still(comp, at: session.clock.time, width: f.width, height: f.height, samples: 4)
+            // A transparent project shows over a checkerboard, as on the stage.
+            still = try? Exporter().still(comp, at: session.clock.time, width: f.width, height: f.height, samples: 4,
+                                          transparent: comp.transparent, checker: comp.transparent)
         }
         if let path = StudioSnapshot.arg("--still") {
             guard let still else {
