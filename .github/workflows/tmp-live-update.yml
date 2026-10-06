@@ -1,0 +1,15 @@
+# Temporary, for this branch only: runs scripts/test-live-update.sh once
+# against the live feed before the release workflow can (it needs main).
+name: tmp-live-update
+on:
+  push:
+    branches: [claude/auto-sign-releases-dfx69k]
+jobs:
+  live:
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/test-live-update.sh
