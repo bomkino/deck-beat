@@ -182,6 +182,16 @@ public enum Margins: String, Codable, CaseIterable, Identifiable, Sendable {
         case .bleed: return (0.012, 0.012 * aspect, 0.012 * aspect)
         }
     }
+
+    /// Where the platform's own interface covers a frame of `aspect`, as shares
+    /// of the frame: its header, its caption and buttons, and the button column
+    /// on the right. The same numbers as the stage's safe-area guides and the
+    /// titles (StudioKit's SafeAreaGuides and TitleArt.insets).
+    public static func platform(aspect: Float) -> (top: Float, bottom: Float, right: Float) {
+        if aspect < 0.62 { return (0.10, 0.22, 0.18) }  // Reels, TikTok, Shorts
+        if aspect < 0.9 { return (0.06, 0.12, 0) }      // portrait feed posts
+        return (0, 0, 0)
+    }
 }
 
 /// Turning the whole grid like a wall seen at an angle.

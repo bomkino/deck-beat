@@ -139,7 +139,7 @@ public struct BeatScene: StageScene {
     }
 
     /// The camera moved in on `card` (`amount` 0 at rest … 1 in close): the card
-    /// fills a slide held up to be read, centred in the safe box. It dollies
+    /// fills a slide held up to be read, centred in the feature box. It dollies
     /// straight in, evenly in scale, and never turns, so the grid stays square on.
     static func zoomCamera(on card: CardPose, amount a: Float, layout: GridLayout)
         -> (offset: SIMD3<Float>, target: SIMD3<Float>, distance: Float, rest: Float) {
@@ -151,7 +151,7 @@ public struct BeatScene: StageScene {
         let r = expf(mix(logf(rest), logf(near), min(max(a, 0), 1)))
         let centre = SIMD2(card.position.x, card.position.y)
         let from = centre * d / rest
-        let q = from + (layout.safeCentre - from) * min(max(a, 0), 1)
+        let q = from + (layout.featureCentre - from) * min(max(a, 0), 1)
         let eye = centre - q * r / d
         return (SIMD3(eye.x, eye.y, z + r - d), SIMD3(eye.x, eye.y, 0), r, rest)
     }
@@ -546,7 +546,7 @@ public struct BeatScene: StageScene {
         // Sized as the camera sees it, a little in front of the grid.
         let k = Self.seen(0.06)
         let big = layout.heroSize(aspect: aspect) / k
-        let centre = SIMD3(layout.safeCentre.x / k, layout.safeCentre.y / k, Float(0.06))
+        let centre = SIMD3(layout.featureCentre.x / k, layout.featureCentre.y / k, Float(0.06))
         // From frame 1 it is already moving: a slow push in, and a punch on the kick.
         let grow = 1 + 0.03 * min(max(push, 0), 1) + 0.015 * kick
         let a = min(max(amount, 0), 1)
@@ -683,13 +683,13 @@ public struct BeatScene: StageScene {
         let home = presented?.position ?? geometry.map { layout.place(SIMD3($0.centre.x, $0.centre.y, 0)) } ?? layout.place(.zero)
         let homeSize = presented?.size ?? (geometry?.size ?? big * 0.3) * s.rest.scale
         // Worked out as the camera sees it, so lifting it towards the lens never
-        // makes it bigger than planned: from its cell to the middle of the box,
+        // makes it bigger than planned: from its cell to the middle of the feature box,
         // centred across and kept inside it.
         let homeSeen = SIMD2(home.x, home.y) * Self.seen(home.z), homeSizeSeen = homeSize * Self.seen(home.z)
-        var y = mix(homeSeen.y, layout.safeCentre.y, spot ? 0.85 : 0.6)
-        let room = max(layout.safeSize.y / 2 - big.y / 2, 0)
-        y = min(max(y, layout.safeCentre.y - room), layout.safeCentre.y + room)
-        let seen = homeSeen + (SIMD2(layout.safeCentre.x, y) - homeSeen) * p.position
+        var y = mix(homeSeen.y, layout.featureCentre.y, spot ? 0.85 : 0.6)
+        let room = max(layout.featureSize.y / 2 - big.y / 2, 0)
+        y = min(max(y, layout.featureCentre.y - room), layout.featureCentre.y + room)
+        let seen = homeSeen + (SIMD2(layout.featureCentre.x, y) - homeSeen) * p.position
         let z = mix(home.z, 0.25, p.lift)
         let k = Self.seen(z)
         let grow = 1 + 0.015 * kick * p.amount

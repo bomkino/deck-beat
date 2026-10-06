@@ -78,6 +78,10 @@ jobs:
           still v3-weave --deck wide --slides 15 --drop weave --time drop:-0.45
           still v3-zoom --deck wide --slides 15 --feature zoom --time feature:0.4
           still v3-blinds --deck hd --slides 30 --grid 3x5 --turn blinds --time swap:-0.06
+          # 3.0.1: a slide held up to be read stays clear of the Reel's buttons and caption,
+          # stepping out of the grid and as the cover at the start.
+          still fix-lift --deck wide --slides 15 --feature lift --time feature:0.5
+          still fix-cover --deck wide --slides 15 --time 0.2
           # The whole window, inspector and transport included, once it has settled,
           # and the screen as the runner shows it, which also catches glass and vibrancy.
           perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot lab-output/app-window.png --size 1220x720 --time 2 --settle 10 \
@@ -89,7 +93,8 @@ jobs:
           cat "$RUNNER_TEMP/app.log"
           # Small copies in the log, for reviewers who can't download the artifact.
           for f in app-window app-screen app-still-wide app-still-hd app-still-hd-caption \
-                   app-v3-fan app-v3-tunnel app-v3-strip app-v3-weave app-v3-zoom app-v3-blinds app-v3-words; do
+                   app-v3-fan app-v3-tunnel app-v3-strip app-v3-weave app-v3-zoom app-v3-blinds app-v3-words \
+                   app-fix-lift app-fix-cover; do
             [ -s "lab-output/$f.png" ] || continue
             sips -s format jpeg -s formatOptions 70 -Z 1200 "lab-output/$f.png" --out "$RUNNER_TEMP/$f.jpg" >/dev/null
             echo "thumbnail: $f.jpg"

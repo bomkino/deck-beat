@@ -43,7 +43,7 @@ SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY_OVERRIDE:-P43E8I+FgVyAW3QkS4J9bnDRRhAns
 for APP in "${APPS[@]}"; do
   # Projects are packages: project.json plus a Media folder, as in Drift.
   case "$APP" in
-    DeckBeat) BUNDLE_NAME="Deck Beat"; BUNDLE_ID="dog.pitch.deckbeat"; UTI="dog.pitch.deckbeat.project"; EXT="deckbeat"; DOC_NAME="Deck Beat Project"; VERSION="3.0.0"; REPO="bomkino/deck-beat" ;;
+    DeckBeat) BUNDLE_NAME="Deck Beat"; BUNDLE_ID="dog.pitch.deckbeat"; UTI="dog.pitch.deckbeat.project"; EXT="deckbeat"; DOC_NAME="Deck Beat Project"; VERSION="3.0.1"; REPO="bomkino/deck-beat" ;;
     *) echo "unknown app $APP"; exit 2 ;;
   esac
   VERSION="${VERSION_OVERRIDE:-$VERSION}"
