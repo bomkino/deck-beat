@@ -24,8 +24,9 @@ public enum DemoDeck {
 
     /// Slide `index` at any size, such as 2576 × 1080 for a deck made for wide
     /// screens: laid out as at 1600 × 900, scaled to fit, its background carried
-    /// out to the edges.
-    public static func slide(index: Int, width w: Int, height h: Int) -> CGImage {
+    /// out to the edges. `number` puts a page number in the corner, to tell
+    /// the slides of a longer deck apart where the fifteen designs come round again.
+    public static func slide(index: Int, width w: Int, height h: Int, number: Int? = nil) -> CGImage {
         let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         let k = min(CGFloat(w) / CGFloat(width), CGFloat(h) / CGFloat(height))
@@ -49,6 +50,15 @@ public enum DemoDeck {
         case 12: roadmap(d)
         case 13: ask(d)
         default: thanks(d)
+        }
+        if let number {
+            let label = String(format: "%02d", number)
+            // In the corner of the whole slide, bleed included.
+            let size = CGSize(width: CGFloat(label.count) * 42 + 52, height: 100)
+            let pill = CGRect(x: CGFloat(width) + spare.width - 48 - size.width, y: CGFloat(height) + spare.height - 48 - size.height,
+                              width: size.width, height: size.height)
+            d.roundRect(pill, radius: size.height / 2, colour: night.alpha(0.85))
+            d.text(label, x: pill.minX + 26, y: pill.minY + 16, size: 64, weight: .demi, colour: paper)
         }
         return ctx.makeImage()!
     }

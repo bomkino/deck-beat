@@ -32,7 +32,7 @@ mkdir -p "$DIST"
 for APP in "${APPS[@]}"; do
   # Projects are packages: project.json plus a Media folder, as in Drift.
   case "$APP" in
-    DeckBeat) BUNDLE_NAME="Deck Beat"; BUNDLE_ID="dog.pitch.deckbeat"; UTI="dog.pitch.deckbeat.project"; EXT="deckbeat"; DOC_NAME="Deck Beat Project"; VERSION="1.0.0" ;;
+    DeckBeat) BUNDLE_NAME="Deck Beat"; BUNDLE_ID="dog.pitch.deckbeat"; UTI="dog.pitch.deckbeat.project"; EXT="deckbeat"; DOC_NAME="Deck Beat Project"; VERSION="2.0.0" ;;
     *) echo "unknown app $APP"; exit 2 ;;
   esac
 

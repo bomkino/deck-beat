@@ -18,7 +18,10 @@ struct TitlePage: View {
                 if session.project.title != nil {
                     Button {
                         field = nil
-                        session.update("Remove Title") { $0.title = nil }
+                        session.update("Remove Title") { p in
+                            p.title = nil
+                            BeatSession.refit(&p)
+                        }
                     } label: { Text("Remove").textStyle(.caption) }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                 }
@@ -61,6 +64,7 @@ struct TitlePage: View {
                     var t = p.title ?? Self.blank
                     t[keyPath: key] = v
                     p.title = t
+                    BeatSession.refit(&p)
                 }
                 pause?.cancel()
                 pause = Task { @MainActor in

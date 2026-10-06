@@ -185,7 +185,7 @@ final class BeatSession: StageSource {
         h.combine(slideAspect)
         h.combine(project.slides.count)
         h.combine(starred)
-        let clear = clearance(for: project, format: format)
+        let clear = Self.clearance(for: project, format: format)
         h.combine(clear)
         let key = h.finalize()
         let made: Planned
@@ -214,7 +214,7 @@ final class BeatSession: StageSource {
         guard let analysis, !p.slides.isEmpty else { return nil }
         let settings = p.settings, clip = p.clip, landOnDrop = p.landOnDrop, aspect = Float(format.aspect), slideAspect = slideAspect
         let count = p.slides.count, starred = Set(p.slides.indices.filter { p.slides[$0].featured })
-        let clear = clearance(for: p, format: format)
+        let clear = Self.clearance(for: p, format: format)
         return {
             let range = clip.resolve(analysis, settings: settings, landOnDrop: landOnDrop)
             return BeatSession.plan(analysis, settings: settings, clip: range, aspect: aspect, slideAspect: slideAspect, slides: count,
@@ -223,7 +223,7 @@ final class BeatSession: StageSource {
     }
 
     /// The room a caption shown throughout takes at the top or foot of the frame, kept clear of the grid.
-    func clearance(for p: BeatProject, format: CanvasFormat) -> Clearance {
+    nonisolated static func clearance(for p: BeatProject, format: CanvasFormat) -> Clearance {
         guard let title = p.title, title.timing == .throughout else { return .none }
         let reach = TitleArt.reach(title, width: format.width, height: format.height)
         return Clearance(top: Float(reach.top), bottom: Float(reach.bottom))
@@ -290,6 +290,7 @@ final class BeatSession: StageSource {
             var t = p.title ?? ReelTitle(placement: .centre, timing: .opening)
             change(&t)
             p.title = t
+            Self.refit(&p)
         }
     }
 
@@ -446,11 +447,20 @@ final class BeatSession: StageSource {
         loadMedia()
     }
 
-    /// Fits the grid to the deck while it follows the deck.
+    /// Fits the grid to the deck while it follows the deck, on the canvas and
+    /// around the caption it has now.
     static func refit(_ p: inout BeatProject) {
         guard p.gridFollowsDeck, !p.slides.isEmpty else { return }
         p.settings.grid = p.settings.grid.fitted(count: p.slides.count, aspect: Float(p.format.aspect),
-                                                  slideAspect: Composer.typicalAspect(p.slides.map(\.aspect)))
+                                                  slideAspect: Composer.typicalAspect(p.slides.map(\.aspect)),
+                                                  clear: clearance(for: p, format: p.format))
+    }
+
+    func setFormat(_ format: CanvasFormat) {
+        update("Canvas") { p in
+            p.format = format
+            Self.refit(&p)
+        }
     }
 
     /// Sorts dropped files: sound becomes the song, everything else a slide.
@@ -519,20 +529,28 @@ final class BeatSession: StageSource {
         for item in missing {
             let url = store.url(for: item.file)
             let kind = item.kind, page = item.page, id = item.id
+            if kind == .video {
+                // How long the clip runs, for a slide that plays it through.
+                Task { [weak self] in
+                    guard let d = try? await AVURLAsset(url: url).load(.duration).seconds, d.isFinite, let self else { return }
+                    self.clipDurations[id] = d
+                    self.version += 1
+                    self.clock.duration = self.loopDuration
+                }
+            }
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let tex = try? MediaLoader.load(url: url, kind: kind, page: page, maxSide: side)
                 let thumb = MediaLoader.cgImage(url: url, kind: kind, page: page, maxSide: 360)
-                let duration: Double? = kind == .video ? AVURLAsset(url: url).duration.seconds : nil
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.importing = max(0, self.importing - 1)
-                    if let duration, duration.isFinite { self.clipDurations[id] = duration }
                     if let tex {
                         self.textures[id] = tex
                         if let i = self.project.slides.firstIndex(where: { $0.id == id }), abs(self.project.slides[i].aspect - tex.aspect) > 0.001 {
                             // The true shape, recorded without an undo step.
                             var p = self.project
                             p.slides[i].aspect = tex.aspect
+                            Self.refit(&p)
                             self.project = p
                             self.document.project = p
                         }

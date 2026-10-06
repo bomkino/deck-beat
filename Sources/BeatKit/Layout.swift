@@ -190,7 +190,8 @@ public struct GridLayout: Sendable {
     /// crops the least, if it keeps at least 65 % of each slide; otherwise
     /// the slide-shaped grid that covers the most of the box, so wide slides
     /// in a tall frame are never cut in half.
-    public static func fit(count: Int, aspect: Float, slideAspect: Float, base: GridSettings) -> (columns: Int, rows: Int, shape: CellShape) {
+    public static func fit(count: Int, aspect: Float, slideAspect: Float, base: GridSettings,
+                           clear: Clearance = .none) -> (columns: Int, rows: Int, shape: CellShape) {
         let n = max(1, count)
         var covering: (columns: Int, rows: Int, width: Float)?
         var filled: (columns: Int, rows: Int, crop: Float, width: Float)?
@@ -202,13 +203,13 @@ public struct GridLayout: Sendable {
             g.columns = c
             g.rows = r
             g.shape = .slide
-            let slide = GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect)
+            let slide = GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect, clear: clear)
             let cover = SIMD2(slide.gridSize.x / slide.safeSize.x, slide.gridSize.y / slide.safeSize.y)
             let w = slide.cells[0].size.x
             if min(cover.x, cover.y) >= 0.75, w > (covering?.width ?? 0) + 1e-5 { covering = (c, r, w) }
             if cover.x * cover.y > (open?.area ?? 0) + 1e-5 { open = (c, r, cover.x * cover.y) }
             g.shape = .fill
-            let fill = GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect)
+            let fill = GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect, clear: clear)
             let crop = fill.crop
             if crop <= 0.35, filled == nil || crop < filled!.crop - 0.02 || (crop < filled!.crop + 0.02 && fill.cells[0].size.x > filled!.width) {
                 filled = (c, r, crop, fill.cells[0].size.x)
@@ -227,13 +228,14 @@ public extension GridSettings {
     /// This grid refitted to a deck of `count` slides of `slideAspect` on a
     /// canvas of `aspect`. The shape stays Auto wherever Auto already lands on
     /// the fitted shape, so the grid keeps working across canvas formats.
-    func fitted(count: Int, aspect: Float, slideAspect: Float) -> GridSettings {
-        let f = GridLayout.fit(count: count, aspect: aspect, slideAspect: slideAspect, base: self)
+    /// `clear` is the room a caption keeps at the top or foot of the frame.
+    func fitted(count: Int, aspect: Float, slideAspect: Float, clear: Clearance = .none) -> GridSettings {
+        let f = GridLayout.fit(count: count, aspect: aspect, slideAspect: slideAspect, base: self, clear: clear)
         var g = self
         g.columns = f.columns
         g.rows = f.rows
         g.shape = .auto
-        if GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect).shape != f.shape { g.shape = f.shape }
+        if GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect, clear: clear).shape != f.shape { g.shape = f.shape }
         return g
     }
 }

@@ -45,7 +45,7 @@ enum WideDecks {
         func deck(_ size: (w: Int, h: Int), _ count: Int) throws -> [MediaTexture] {
             let key = "\(size.w)x\(size.h)x\(count)"
             if let d = decks[key] { return d }
-            let made = try (0..<count).map { try MediaLoader.texture(from: DemoDeck.slide(index: $0, width: size.w, height: size.h)) }
+            let made = try (0..<count).map { try MediaLoader.texture(from: DemoDeck.slide(index: $0, width: size.w, height: size.h, number: $0 + 1)) }
             decks[key] = made
             return made
         }

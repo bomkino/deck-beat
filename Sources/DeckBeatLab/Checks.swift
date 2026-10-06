@@ -300,6 +300,41 @@ enum Checks {
         let highest = cl.cells.map { cl.safeCentre.y + $0.centre.y + $0.size.y / 2 }.max() ?? 1
         check("caption room", highest <= 0.5 - 0.25 + 1e-4, String(format: "top of the grid %.0f px below the top of the frame",
                                                                    (0.5 - highest) * 1920))
+        // And a deck fitted around it keeps its slides whole, or nearly.
+        let hdAround = GridSettings().fitted(count: 24, aspect: tall, slideAspect: 16.0 / 9.0, clear: clear)
+        let around = GridLayout(settings: hdAround, aspect: tall, slideAspect: 16.0 / 9.0, clear: clear)
+        let bare = GridLayout(settings: GridSettings().fitted(count: 24, aspect: tall, slideAspect: 16.0 / 9.0), aspect: tall,
+                              slideAspect: 16.0 / 9.0, clear: clear)
+        check("fit round a caption", around.crop <= 0.35 + 1e-4 && around.cells.count >= 24,
+              String(format: "24 slides at 1920×1080: %d×%d %@, %.0f%% cropped (fitted without it: %d×%d %@, %.0f%%)", around.columns, around.rows,
+                     around.shape.rawValue as NSString, around.crop * 100, bare.columns, bare.rows, bare.shape.rawValue as NSString, bare.crop * 100))
+
+        // A deck smaller than the grid: every slide shows before any repeats,
+        // and a repeat never sits beside itself where another slide could.
+        var smallOK = true, smallDetail: [String] = []
+        for (slides, columns, rows) in [(20, 3, 7), (13, 3, 5), (8, 3, 5), (4, 3, 5), (2, 2, 3)] {
+            for order in [SlideOrder.reading, .shuffle, .coverCentre] {
+                var sm = BeatSettings()
+                sm.grid.columns = columns
+                sm.grid.rows = rows
+                sm.grid.order = order
+                let layout = GridLayout(settings: sm.grid, aspect: tall, slideAspect: 16.0 / 9.0)
+                let p = Choreographer.plan(a, settings: sm, layout: layout, slides: slides, clipStart: 0, clipLength: 30)
+                var uses = [Int](repeating: 0, count: slides)
+                for s in p.firstSlide { uses[s] += 1 }
+                var beside = 0
+                for c in layout.cells {
+                    if c.column > 0, p.firstSlide[c.index] == p.firstSlide[c.index - 1] { beside += 1 }
+                    if c.row > 0, p.firstSlide[c.index] == p.firstSlide[c.index - columns] { beside += 1 }
+                }
+                let even = (uses.min() ?? 0) >= 1 && (uses.max() ?? 0) - (uses.min() ?? 0) <= 1
+                if !even || (order == .reading && slides >= 4 && beside > 0) {
+                    smallOK = false
+                    smallDetail.append("\(slides) on \(columns)×\(rows) \(order.rawValue): uses \(uses), \(beside) beside")
+                }
+            }
+        }
+        check("small decks", smallOK, smallOK ? "20 on 3×7, 13, 8 and 4 on 3×5, 2 on 2×3: every slide shows, repeats spread" : smallDetail.joined(separator: "; "))
 
         return failures
     }

@@ -60,7 +60,7 @@ struct BeatWindow: View {
         .navigationSubtitle(subtitle)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                FormatPicker(current: session.project.format) { f in session.update("Canvas") { $0.format = f } }
+                FormatPicker(current: session.project.format) { f in session.setFormat(f) }
                 Button { BeatPanels.addSlides(session) } label: { Label("Add Slides", systemImage: "rectangle.stack.badge.plus") }
                     .help("Add slides: images, PDFs or clips")
                 Button { BeatPanels.chooseSong(session) } label: { Label("Choose Song", systemImage: "music.note") }
@@ -348,7 +348,7 @@ struct BeatSnapshotHost: ViewModifier {
         }
         if let id = StudioSnapshot.arg("--look") { session.choose(Looks.look(id)) }
         if let fmt = StudioSnapshot.arg("--format"), let f = CanvasFormat.presets.first(where: { $0.id == fmt }) {
-            session.update("Canvas") { $0.format = f }
+            session.setFormat(f)
         }
         if let m = StudioSnapshot.arg("--mode"), let mode = BeatMode(rawValue: m) { session.update("Mode") { $0.settings.mode = mode } }
         if let c = StudioSnapshot.arg("--clip").flatMap(Int.init).flatMap(ClipLength.init(rawValue:)) { session.setClip(c) }
@@ -392,7 +392,7 @@ extension BeatSnapshotHost {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return (0..<max(1, count)).compactMap { i in
             let url = dir.appendingPathComponent(String(format: "Slide %02d.png", i + 1))
-            let rep = NSBitmapImageRep(cgImage: DemoDeck.slide(index: i, width: size.w, height: size.h))
+            let rep = NSBitmapImageRep(cgImage: DemoDeck.slide(index: i, width: size.w, height: size.h, number: i + 1))
             guard let data = rep.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil else { return nil }
             return url
         }

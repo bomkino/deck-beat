@@ -345,19 +345,18 @@ public enum Choreographer {
         var first = [Int](repeating: 0, count: n)
         do {
             let perm = rng.shuffled(slideCount)
-            for c in layout.cells {
-                switch s.grid.order {
-                case .shuffle:
-                    first[c.index] = slideCount >= n ? perm[c.index] : perm[(c.index + 2 * c.row) % slideCount]
-                default:
-                    first[c.index] = slideCount >= n ? c.index : (c.index + 2 * c.row) % slideCount
-                }
-            }
-            if coverSlide != 0, !first.contains(coverSlide) { first[0] = coverSlide }
             let middle = s.grid.order == .coverCentre || (s.grid.order == .reading && layout.rows % 2 == 1 && layout.columns % 2 == 1)
-            if middle, n > 1 {
-                let centre = layout.centreCell
-                if let at = first.firstIndex(of: coverSlide) { first.swapAt(at, centre) } else { first[centre] = coverSlide }
+            if slideCount >= n {
+                for c in layout.cells { first[c.index] = s.grid.order == .shuffle ? perm[c.index] : c.index }
+                if coverSlide != 0, !first.contains(coverSlide) { first[0] = coverSlide }
+                if middle, n > 1 {
+                    let centre = layout.centreCell
+                    if let at = first.firstIndex(of: coverSlide) { first.swapAt(at, centre) } else { first[centre] = coverSlide }
+                }
+            } else {
+                let pin = middle && n > 1 ? (cell: layout.centreCell, slide: coverSlide) : nil
+                let order = Self.spread(slideCount, over: layout, pin: pin)
+                first = s.grid.order == .shuffle ? order.map { perm[$0] } : order
             }
         }
         let cover = first.firstIndex(of: coverSlide) ?? 0
@@ -911,6 +910,62 @@ public enum Choreographer {
 @inline(__always) func smoothstep(_ a: Float, _ b: Float, _ x: Float) -> Float {
     let t = min(max((x - a) / max(b - a, 1e-5), 0), 1)
     return t * t * (3 - 2 * t)
+}
+
+extension Choreographer {
+    /// A deck smaller than the grid, dealt in reading order: every slide shows
+    /// before any shows twice, and a repeat never sits next to itself where
+    /// another slide can go there. `pin` holds one slide in one cell, such as
+    /// the cover in the middle.
+    static func spread(_ slides: Int, over layout: GridLayout, pin: (cell: Int, slide: Int)? = nil) -> [Int] {
+        // Dealing greedily can corner itself next to the pinned slide; deal
+        // again from the next slide along until no repeat sits beside itself.
+        var best: (deal: [Int], beside: Int)?
+        for start in 0..<slides {
+            let deal = Self.deal(slides, over: layout, pin: pin, from: start)
+            let beside = layout.cells.filter { c in
+                (c.column > 0 && deal[c.index] == deal[c.index - 1]) || (c.row > 0 && deal[c.index] == deal[c.index - layout.columns])
+            }.count
+            if beside < best?.beside ?? .max { best = (deal, beside) }
+            if beside == 0 { break }
+        }
+        return best?.deal ?? []
+    }
+
+    private static func deal(_ slides: Int, over layout: GridLayout, pin: (cell: Int, slide: Int)?, from start: Int) -> [Int] {
+        let n = layout.cells.count, columns = layout.columns
+        var out = [Int](repeating: -1, count: n)
+        var uses = [Int](repeating: 0, count: slides)
+        if let pin {
+            out[pin.cell] = pin.slide
+            uses[pin.slide] += 1
+        }
+        var next = start % slides
+        for c in 0..<n where c != pin?.cell {
+            let row = c / columns, column = c % columns
+            // Side by side or above and below, then corner to corner.
+            var beside: [Int] = [], corner: [Int] = []
+            for dr in -1...1 {
+                for dc in -1...1 where dr != 0 || dc != 0 {
+                    let r2 = row + dr, c2 = column + dc
+                    guard r2 >= 0, c2 >= 0, c2 < columns, r2 * columns + c2 < n else { continue }
+                    let slide = out[r2 * columns + c2]
+                    guard slide >= 0 else { continue }
+                    if dr == 0 || dc == 0 { beside.append(slide) } else { corner.append(slide) }
+                }
+            }
+            let least = uses.min() ?? 0
+            let candidates = (0..<slides).map { (next + $0) % slides }.filter { uses[$0] == least }
+            let pick = candidates.first { !beside.contains($0) && !corner.contains($0) }
+                ?? candidates.first { !beside.contains($0) }
+                ?? candidates.first
+                ?? next
+            out[c] = pick
+            uses[pick] += 1
+            next = (pick + 1) % slides
+        }
+        return out
+    }
 }
 
 /// When lit cells fall back below half, soonest first: a binary min-heap.

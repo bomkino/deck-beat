@@ -8,9 +8,11 @@ It is built on the same engine as Drift, Galileo Gallery and Backdrop, and it is
 
 ## What it does
 
-**Slides.** Drag in images, PDFs (each page becomes a slide) or video clips, or use File › Add Slides (⇧⌘I). Reorder them in the sidebar. Star a slide to feature it more often; the first starred slide becomes the cover. A new window opens on a 15-slide sample deck so there is something to play with straight away.
+**Slides.** Drag in images, PDFs (each page becomes a slide) or video clips, or use File › Add Slides (⇧⌘I). Slides of any shape work, including decks made for wide screens such as 1920×1080 and 2576×1080. A Keynote or PowerPoint file gets a pointer to save it as a PDF first. Reorder slides in the sidebar. Star a slide to feature it more often; the first starred slide becomes the cover. A new window opens on a 15-slide sample deck so there is something to play with straight away.
 
 **A song.** Drag in any audio file, or a video whose sound you want (MP3, AAC, WAV, AIFF, MOV, MP4), or use File › Choose Song (⇧⌘O). Deck Beat finds the tempo, the beats, the bars and the drops. Until you add one, a synthesised 34-second demo groove plays.
+
+**Fixing the beat.** If Deck Beat hears a song at half or double its real speed, set it to ½× or 2×. *Bars start on beat* moves bar one to the second, third or fourth beat, and *Nudge* slides the whole grid up to 150 ms earlier or later.
 
 **Looks.** Seven starting points, each a complete set of the settings below:
 
@@ -24,7 +26,7 @@ It is built on the same engine as Drift, Galileo Gallery and Backdrop, and it is
 | Gallery Wall | The grid hung on an angled wall above a polished floor. For slower songs and quieter work. |
 | Light Box | A pale room for light decks. Resting slides go grey; playing slides come back in colour. |
 
-**The grid.** Columns (1–12), rows (1–20), gap, corner radius, cell shape (slide, fill or square), margins that keep the grid clear of each app's buttons and captions, an optional angled wall with a reflection, and slide order. *Fit the Grid to My Deck* picks the grid with the widest cells that holds every slide. With more slides than cells, resting cells turn over on the downbeats so every slide gets seen.
+**The grid.** Columns (1–12), rows (1–20), gap, corner radius, cell shape (auto, slide, fill or square), margins that keep the grid clear of each app's buttons and captions, an optional angled wall with a reflection, and slide order. A new project's grid follows the deck: it refits as you add or remove slides, change the canvas or add a caption, until you set its size by hand. The fit picks slide-shaped cells that fill the frame, or filled cells that keep at least 65% of each slide, so 15 slides at 2576×1080 get a 2×8 grid of whole slides in a 1080×1920 Reel. *Auto* keeps a slide whole wherever filling its cell would crop more than 40% of it. With more slides than cells, resting cells turn over on the downbeats so every slide gets seen; with fewer, every slide shows before any shows twice, and repeats are kept apart.
 
 **Rest and lit.** Two states, each with its own size, brightness, colour, opacity, lift, tilt, glow, blur, shadow and tint. You set how quickly a slide lights (attack), how long it holds, how long it fades (tail), how much it bounces, and how it idles between beats (still, breathe, float or sway).
 
@@ -35,7 +37,7 @@ It is built on the same engine as Drift, Galileo Gallery and Backdrop, and it is
 - *Read-through:* the deck in order, one slide per step.
 - *Lights On:* bass lights the lower floors, hats the roof.
 
-Every mode can *feature* a slide every 1–16 bars, bringing it forward, big enough to read. Drops get a breath before them and a centre-out hit on them. The engine keeps it watchable: away from the drops and the intro, no more than 40% of the grid is lit at once.
+Every mode can *feature* a slide every 1–16 bars, bringing it forward, big enough to read and always inside the frame, then back to its own cell. Drops get a breath before them and a centre-out hit on them. The engine keeps it watchable: away from the drops and the intro, no more than 40% of the grid is lit at once.
 
 **Intro and ending.** The video opens cold on the cover, never black, and deals the rest of the deck into place in time with the music. You choose the entrance (deal, rise, depth, flip, drop, assemble or unfold), the order (centre out, diagonal, reading, spiral, columns, rows or random) and the length. *Land on the drop* starts the clip so the cover lands on the song's first drop.
 
@@ -45,7 +47,9 @@ The ending can be:
 - *Lights Out:* the slides go dark one by one.
 - *Auto:* Loop for clips of 30 seconds or less, Close for longer ones.
 
-**The room.** Twelve Backdrop styles behind the grid, in your palette or in colours taken from your slides. *Atmosphere* lets the room answer the song: the backdrop lifts on the kick, the light flares on a drop. *Finish* sets the cards' surface (original, print, satin or gloss), bloom, grain, vignette, shadows and motion blur.
+**Titles.** A title and a line above it, such as a date or a client, set large and centred or small in a corner. It can open the video, close it like an end card, or stay throughout as a caption, which the grid moves over to make room for.
+
+**The room.** Eighteen Backdrop styles behind the grid, in your palette or in colours taken from your slides. *Atmosphere* lets the room answer the song: the backdrop lifts on the kick, the light flares on a drop. *Finish* sets the cards' surface (original, print, satin or gloss), bloom, grain, vignette, shadows and motion blur.
 
 **A transport that knows the song.** The clip's waveform, beat and bar marks, bar numbers, drops, and the moments a slide steps forward, with the whole song below and the clip as a bracket you can drag along it. *Best Part* moves the clip to the strongest stretch of the song. Clips run 15, 30, 60 or 90 seconds, or the whole song.
 
@@ -68,11 +72,13 @@ During development you can also run `swift run DeckBeat`.
 
 ```sh
 swift run -c release beat-lab check                  # song analysis, layout, plans and every scene, on the CPU
-swift run -c release beat-lab render --out lab       # contact sheet of every Look, and a 15 s demo clip with sound
+swift run -c release beat-lab bench                  # how long listening and planning take
+swift run -c release beat-lab render --out lab       # contact sheets of every Look and of wide decks, a 15 s demo clip with sound,
+                                                     # and export timings
 bash scripts/verify.sh                               # all of the above, plus headless stills of every Look
 ```
 
-The `verify` workflow runs `beat-lab check` and `beat-lab render` on every push and keeps the contact sheet and the demo clip as an artifact.
+The `verify` workflow runs `beat-lab check`, `bench` and `render` on every push, then opens the app on decks of 2576×1080 and 1920×1080 slides, and keeps the renders and captures as an artifact.
 
 The app can also render a still without opening a window, which is how `verify.sh` checks the Looks:
 
@@ -98,7 +104,7 @@ The choreography is planned once per clip, ahead of time, as a list of light tri
 
 ## Next
 
-- Fixing the beat grid by hand: tap tempo, half and double time, nudge, and choosing which beat is bar 1.
+- Tap tempo, for songs with no clear beat.
 - Words on the beat: a line of text, one segment per bar, above the grid.
 - A muted preview, since most reels autoplay without sound.
 - Covers exported with the video: frame 0 and the fully lit grid as PNGs.
