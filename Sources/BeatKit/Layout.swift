@@ -37,6 +37,11 @@ public struct GridLayout: Sendable {
     /// The box the grid sits in: centre and size.
     public let safeCentre: SIMD2<Float>
     public let safeSize: SIMD2<Float>
+    /// The box a slide held up to be read stays inside: the safe box, and with
+    /// Safe margins also clear of the platform's buttons and caption, so a
+    /// featured or zoomed slide is never under them though the grid may be.
+    public let featureCentre: SIMD2<Float>
+    public let featureSize: SIMD2<Float>
     public let gridSize: SIMD2<Float>
     public let gap: Float
     /// World units per pixel at 1080 on the short side.
@@ -65,6 +70,15 @@ public struct GridLayout: Sendable {
         let W = aspect * (1 - 2 * inset.side), H = 1 - inset.top - inset.bottom
         safeSize = SIMD2(W, H)
         safeCentre = SIMD2(0, (inset.bottom - inset.top) / 2)
+        if g.margins == .safe {
+            let ui = Margins.platform(aspect: aspect)
+            let right = max(inset.side, ui.right), top = max(inset.top, ui.top), bottom = max(inset.bottom, ui.bottom)
+            featureSize = SIMD2(aspect * (1 - inset.side - right), 1 - top - bottom)
+            featureCentre = SIMD2(aspect * (inset.side - right) / 2, (bottom - top) / 2)
+        } else {
+            featureSize = safeSize
+            featureCentre = safeCentre
+        }
         // Never let the gaps eat more than a third of the box.
         let gap = min(g.gap * px, W / Float(cols) * 0.33, H / Float(rows) * 0.33)
         self.gap = gap
@@ -155,11 +169,12 @@ public struct GridLayout: Sendable {
     public var wallRotation: SIMD3<Float> { SIMD3(-wallPitch, wallYaw, 0) }
 
     /// Size of a slide of `aspect` held up to be read: 82 % of the canvas
-    /// wide, never wider than the box nor taller than 60 % of it.
+    /// wide, never wider than the feature box (less room for the kick's punch
+    /// and the cover's push) nor taller than 60 % of it.
     public func heroSize(aspect a: Float, widthFraction: Float = 0.82) -> SIMD2<Float> {
-        var w = min(self.aspect * widthFraction, safeSize.x)
+        var w = min(self.aspect * widthFraction, featureSize.x * 0.94)
         var h = w / a
-        let maxH = safeSize.y * 0.6
+        let maxH = featureSize.y * 0.6
         if h > maxH { h = maxH; w = h * a }
         return SIMD2(w, h)
     }

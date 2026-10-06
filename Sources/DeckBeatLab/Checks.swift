@@ -296,7 +296,7 @@ enum Checks {
         check("v3 loop seam", v3Seam < 0.02, String(format: "largest change %.4f (%@)", v3Seam, v3SeamAt as NSString))
 
         // A zoom on a featured slide keeps it in the frame all the way, and
-        // inside the safe area once it is there, for every slide and canvas shape.
+        // inside the feature box once it is there, for every slide and canvas shape.
         var zoomWorst: Float = -1, zoomSafe: Float = -1, zoomAt = "", zoomFrames = 0
         for canvas in canvases {
             for slideAspect in shapes {
@@ -308,7 +308,7 @@ enum Checks {
                 let scene = BeatScene(plan: p, layout: layout, settings: z)
                 let ctx = SceneContext(items: (0..<15).map { SceneItem(media: $0, occurrence: $0, aspect: slideAspect) }, aspect: canvas,
                                        dials: SceneDials())
-                let safeLo = layout.safeCentre - layout.safeSize / 2, safeHi = layout.safeCentre + layout.safeSize / 2
+                let safeLo = layout.featureCentre - layout.featureSize / 2, safeHi = layout.featureCentre + layout.featureSize / 2
                 for f in p.features {
                     for t in stride(from: f.liftOff, through: f.end, by: 1.0 / 30) {
                         let frame = scene.frame(at: t, ctx)
@@ -333,8 +333,49 @@ enum Checks {
             }
         }
         check("zoom fits", zoomFrames > 0 && zoomWorst <= -0.005 && zoomSafe <= 0.005,
-              String(format: "%d frames zoomed; at most %.3f from the frame's edge (%@), %.3f past the safe area", zoomFrames, zoomWorst,
+              String(format: "%d frames zoomed; at most %.3f from the frame's edge (%@), %.3f past the feature box", zoomFrames, zoomWorst,
                      zoomAt as NSString, zoomSafe))
+
+        // In a Reel with Safe margins, a slide held up to be read (stepped out,
+        // zoomed in on, or the cover at the start) stays clear of the platform's
+        // header, caption and button column, for wide and 16:9 decks.
+        var clearWorst: Float = -1, clearAt = "", clearFrames = 0
+        let ui = Margins.platform(aspect: tall)
+        let clearHi = SIMD2<Float>(tall / 2 - ui.right * tall, 0.5 - ui.top), clearLo = SIMD2<Float>(-tall / 2, -0.5 + ui.bottom)
+        for slideAspect in [wide, Float(16.0 / 9.0)] {
+            for (style, spot) in [(FeatureStyle.lift, false), (.lift, true), (.zoom, false)] {
+                var r = BeatSettings()
+                r.feature = .twoBars
+                r.featureStyle = style
+                r.spotlight = spot
+                r.intro.coldOpen = true
+                let layout = GridLayout(settings: r.grid, aspect: tall, slideAspect: slideAspect)
+                let p = Choreographer.plan(a, settings: r, layout: layout, slides: 15, clipStart: 0, clipLength: 30)
+                let scene = BeatScene(plan: p, layout: layout, settings: r)
+                let ctx = SceneContext(items: (0..<15).map { SceneItem(media: $0, occurrence: $0, aspect: slideAspect) }, aspect: tall,
+                                       dials: SceneDials())
+                var held: [(Double, Float)] = [(0, 3)]
+                for f in p.features { held += stride(from: f.land, through: f.leave, by: 1.0 / 30).map { ($0, 10) } }
+                for (t, layer) in held {
+                    let frame = scene.frame(at: t, ctx)
+                    let eye = SIMD3<Float>(0, 0, GridLayout.eyeDistance) + frame.camera.offset
+                    for c in frame.cards where c.layer >= layer {
+                        let k = GridLayout.eyeDistance / (eye.z - c.position.z)
+                        let centre = (SIMD2(c.position.x, c.position.y) - SIMD2(eye.x, eye.y)) * k
+                        let lo = centre - c.size * k / 2, hi = centre + c.size * k / 2
+                        let over = max(hi.x - clearHi.x, hi.y - clearHi.y, clearLo.x - lo.x, clearLo.y - lo.y)
+                        clearFrames += 1
+                        if over > clearWorst {
+                            clearWorst = over
+                            clearAt = String(format: "slide %.2f, %@%@, t %.2f", slideAspect, style.rawValue as NSString, spot ? " spotlit" : "", t)
+                        }
+                    }
+                }
+            }
+        }
+        check("clear of the buttons", clearFrames > 0 && clearWorst <= 0,
+              String(format: "%d frames held up in a Reel; closest %.0f px from the platform's interface (%@)", clearFrames, -clearWorst * 1920,
+                     clearAt as NSString))
 
         // Words on the beat: one landing per group, in order, each on a beat or
         // half a beat; inside an opening or closing title's window with time to
