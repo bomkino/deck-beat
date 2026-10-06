@@ -2,7 +2,8 @@
 # Proves in-app updates end to end with a throwaway key, as CI runs it: a copy
 # of Deck Beat at 9.0.0 (under another name and identifier, so the real app
 # and its settings are never touched) updates itself to 9.0.1 from a feed on
-# a local web server, and refuses a ZIP with one byte changed.
+# a local web server, and refuses a ZIP with one byte changed. Signing with a
+# key the app doesn't trust is caught by sign-release.sh itself.
 #
 #   bash scripts/test-updates.sh
 #
@@ -52,6 +53,15 @@ codesign -v --strict "$WORK/old.app"
 VERSION_OVERRIDE=9.0.1 bash scripts/build.sh release > "$WORK/build-new.log" 2>&1 || { cat "$WORK/build-new.log"; exit 1; }
 bash scripts/pack-release.sh "$WORK/feed" > /dev/null
 DOWNLOAD_URL="http://127.0.0.1:$PORT/" bash scripts/sign-release.sh "$WORK/feed"
+# A key the app doesn't trust is caught before any feed is written.
+swift "$WORK/keygen.swift" | sed -n 1p > "$WORK/wrong.key"
+mkdir -p "$WORK/wrong" && cp "$WORK/feed"/*.zip "$WORK/feed/SHA256SUMS.txt" "$WORK/wrong/"
+if SPARKLE_KEY="$WORK/wrong.key" DOWNLOAD_URL="http://127.0.0.1:$PORT/" bash scripts/sign-release.sh "$WORK/wrong" > "$WORK/wrong.log" 2>&1; then
+  echo "wrong key: FAILED, it signed"; exit 1
+fi
+grep -q "wouldn't accept" "$WORK/wrong.log" && [ ! -f "$WORK/wrong/appcast.xml" ] \
+  || { echo "wrong key: refused, but not by the signature check"; cat "$WORK/wrong.log"; exit 1; }
+echo "wrong key: caught before a feed was written"
 # Sparkle 2 writes the version as an element; older feeds had it as an attribute.
 grep -Eq 'sparkle:shortVersionString(>|=")9\.0\.1' "$WORK/feed/appcast.xml" \
   && grep -q 'sparkle:edSignature=' "$WORK/feed/appcast.xml" \

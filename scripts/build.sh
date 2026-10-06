@@ -37,7 +37,7 @@ DIST="$ROOT/../dist"
 mkdir -p "$DIST"
 
 # In-app updates (Sparkle): pitch.dog's apps trust updates signed with this
-# key. The private half never enters a repository; see docs/UPDATES.md.
+# key. The private half is never committed; see docs/UPDATES.md.
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY_OVERRIDE:-P43E8I+FgVyAW3QkS4J9bnDRRhAnsS4y3dT2WDce1lQ=}"
 
 for APP in "${APPS[@]}"; do
