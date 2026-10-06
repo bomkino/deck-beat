@@ -94,7 +94,7 @@ jobs:
           still v6-drift --look afterglow --deck wide --slides 15 --time end:-1.8
           still v6-collage --deck mixed --slides 15 --time 9
           still v6-paste-up --look paste-up --deck mixed --slides 18 --time 11
-          still v6-clear --look beat-by-beat --deck wide --slides 15 --margins clear --time 12
+          still v6-clear --look beat-by-beat --deck wide --slides 15 --margins clear --time drop:2.6
           still v6-transparent --look beat-by-beat --deck hd --slides 15 --background transparent --time drop:1.5
           # Titles in pitch.dog type: a pop and a reveal caught partway in, and the italic at rest.
           still v6-pop --deck hd --slides 15 --words pop --time arriving:2 \
@@ -113,15 +113,21 @@ jobs:
           wait
           cat "$RUNNER_TEMP/app.log"
           # The inspector's new pages: idle and active presets, and the ways in and out.
+          # The window is sized to fit the runner's screen, which is captured too: the window
+          # capture alone draws glass as flat colour.
           for page in cells intro; do
-            perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot "lab-output/app-window-$page.png" --size 1220x900 --time 2 --settle 10 \
-              --look beat-by-beat --deck hd --slides 15 --page "$page" > "$RUNNER_TEMP/app-$page.log" 2>&1 || true
+            perl -e 'alarm 240; exec @ARGV' "$APP" --snapshot "lab-output/app-window-$page.png" --size 1100x780 --time 20 --settle 10 \
+              --look beat-by-beat --deck hd --slides 15 --page "$page" > "$RUNNER_TEMP/app-$page.log" 2>&1 &
+            for i in $(seq 1 120); do grep -q "snapshot: ready" "$RUNNER_TEMP/app-$page.log" && break; sleep 1; done
+            sleep 4
+            screencapture -x "lab-output/app-screen-$page.png" || true
+            wait || true
             cat "$RUNNER_TEMP/app-$page.log"
           done
           # Small copies in the log, for reviewers who can't download the artifact.
           for f in app-window app-screen app-still-wide app-still-hd app-still-hd-caption \
                    app-v3-fan app-v3-tunnel app-v3-strip app-v3-weave app-v3-zoom app-v3-blinds app-v3-words \
-                   app-fix-lift app-fix-cover app-window-cells app-window-intro \
+                   app-fix-lift app-fix-cover app-window-cells app-window-intro app-screen-cells app-screen-intro \
                    app-v6-build app-v6-hits app-v6-voices app-v6-mosaic app-v6-leave app-v6-curtain app-v6-drift \
                    app-v6-collage app-v6-paste-up app-v6-clear app-v6-transparent app-v6-pop app-v6-reveal app-v6-italic; do
             [ -s "lab-output/$f.png" ] || continue

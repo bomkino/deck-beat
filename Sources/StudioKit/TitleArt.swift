@@ -278,7 +278,12 @@ public enum TitleArt {
                         spans.append((x + min(max(a, 0), wide), x + min(max(e, 0), wide), first + g))
                     }
                 }
-                if !spans.isEmpty { rows.append(Row(top: baseline - b.cap, bottom: baseline + b.descent, spans: spans)) }
+                // Split by the ink, not the font's line box: set tight, a line's box reaches well into
+                // the next line's capitals, and a split there shows their tops before they arrive.
+                let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+                let inkTop = ink.isEmpty ? baseline - b.cap : baseline - ink.maxY
+                let inkBottom = ink.isEmpty ? baseline : baseline - min(ink.minY, 0)
+                if !spans.isEmpty { rows.append(Row(top: inkTop, bottom: inkBottom, spans: spans)) }
                 baseline += b.lineHeight
             }
             top += b.height + s.gap
