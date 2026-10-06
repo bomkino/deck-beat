@@ -3,10 +3,13 @@ import BeatKit
 import StudioKit
 import SwiftUI
 import UniformTypeIdentifiers
+import Updates
 
 @main
 struct DeckBeatApp: App {
     @NSApplicationDelegateAdaptor(StudioAppDelegate.self) private var delegate
+    /// Updates from the GitHub releases; off for headless stills, snapshots and exports.
+    @StateObject private var updates = AppUpdates(start: !StudioSnapshot.isRequested)
 
     init() {
         UserDefaults.standard.register(defaults: [
@@ -26,6 +29,7 @@ struct DeckBeatApp: App {
                 .id(ObjectIdentifier(file.document))
         }
         .commands {
+            CheckForUpdatesCommand(updates: updates)
             CommandGroup(after: .toolbar) {
                 AppearanceMenu()
             }

@@ -1,7 +1,14 @@
 #!/bin/bash
-# Builds Deck Beat as a signed (ad-hoc) .app bundle in ../dist.
+# Builds Deck Beat as a signed (ad-hoc) .app bundle in ../dist, with Sparkle
+# inside for updates from the GitHub releases (docs/UPDATES.md).
 #
 #   bash scripts/build.sh [debug|release]
+#
+# Update testing builds a copy under another name and identifier, at any
+# version, so it never touches the real app or its settings:
+#   VERSION_OVERRIDE=9.0.0 BUNDLE_NAME_OVERRIDE="Deck Beat Update Test" \
+#   BUNDLE_ID_OVERRIDE=dog.pitch.deckbeat.updatetest bash scripts/build.sh release
+# SPARKLE_PUBLIC_KEY_OVERRIDE swaps in a throwaway key, for CI's update test only.
 #
 # Uses the Command Line Tools only. The macOS 26.5 SDK is used because the
 # macOS 27 SDK expands SwiftUI's @State with a macro plugin that ships only
@@ -29,12 +36,22 @@ echo "SDK: ${SDKROOT:-default}"
 DIST="$ROOT/../dist"
 mkdir -p "$DIST"
 
+# In-app updates (Sparkle): pitch.dog's apps trust updates signed with this
+# key. The private half never enters a repository; see docs/UPDATES.md.
+SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY_OVERRIDE:-P43E8I+FgVyAW3QkS4J9bnDRRhAnsS4y3dT2WDce1lQ=}"
+
 for APP in "${APPS[@]}"; do
   # Projects are packages: project.json plus a Media folder, as in Drift.
   case "$APP" in
-    DeckBeat) BUNDLE_NAME="Deck Beat"; BUNDLE_ID="dog.pitch.deckbeat"; UTI="dog.pitch.deckbeat.project"; EXT="deckbeat"; DOC_NAME="Deck Beat Project"; VERSION="2.0.0" ;;
+    DeckBeat) BUNDLE_NAME="Deck Beat"; BUNDLE_ID="dog.pitch.deckbeat"; UTI="dog.pitch.deckbeat.project"; EXT="deckbeat"; DOC_NAME="Deck Beat Project"; VERSION="3.0.0"; REPO="bomkino/deck-beat" ;;
     *) echo "unknown app $APP"; exit 2 ;;
   esac
+  VERSION="${VERSION_OVERRIDE:-$VERSION}"
+  BUNDLE_NAME="${BUNDLE_NAME_OVERRIDE:-$BUNDLE_NAME}"
+  BUNDLE_ID="${BUNDLE_ID_OVERRIDE:-$BUNDLE_ID}"
+  # Sparkle compares CFBundleVersion, so it follows the version itself: 3.0.0 is 30000.
+  BUILD="$(echo "$VERSION" | awk -F. '{ printf "%d", $1 * 10000 + $2 * 100 + $3 }')"
+  FEED="https://github.com/$REPO/releases/latest/download/appcast.xml"
 
   echo "== Building $APP ($CONFIG)"
   swift build -c "$CONFIG" --product "$APP" 2>&1 | grep -E "error|warning: unre|Compiling|Build comp" | grep -v "^\[" || true
@@ -50,8 +67,10 @@ for APP in "${APPS[@]}"; do
     cp "$ROOT/Resources/Icons/$APP.icns" "$APPDIR/Contents/Resources/AppIcon.icns"
   fi
   cp "$ROOT/NOTICES.md" "$APPDIR/Contents/Resources/NOTICES.md" 2>/dev/null || true
-
-  BUILD="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
+  cp -R "$ROOT/Resources/Licenses" "$APPDIR/Contents/Resources/Licenses"
+  # Sparkle, as Swift Package Manager built it, keeping its own signature.
+  mkdir -p "$APPDIR/Contents/Frameworks"
+  ditto "$(dirname "$BIN")/Sparkle.framework" "$APPDIR/Contents/Frameworks/Sparkle.framework"
   cat > "$APPDIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -70,6 +89,9 @@ for APP in "${APPS[@]}"; do
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
   <key>NSHumanReadableCopyright</key><string>© 2026 pitch.dog</string>
+  <key>SUFeedURL</key><string>$FEED</string>
+  <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
+  <key>SUEnableAutomaticChecks</key><true/>
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -94,6 +116,7 @@ for APP in "${APPS[@]}"; do
 </dict>
 </plist>
 PLIST
-  codesign --force --deep --sign - "$APPDIR" >/dev/null 2>&1 || echo "codesign failed (continuing unsigned)"
+  # Ad hoc, and not --deep: Sparkle.framework keeps the signature its makers gave it.
+  codesign --force --sign - "$APPDIR" >/dev/null 2>&1 || echo "codesign failed (continuing unsigned)"
   echo "   → $APPDIR"
 done
