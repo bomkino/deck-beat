@@ -22,7 +22,7 @@ The board builds on the beat. A video can now open on the empty room and put one
 - **Sound off.** A speaker switch in the transport mutes the preview, since most Reels first play silent. Exports keep their sound.
 - Big decks load gently, three slides at a time, and files that can't be read are named in one note. Exports are named after the document and the Look. ⌘P plays and pauses.
 - A project saved by a newer Deck Beat opens with a note and is never saved over. Projects from 1.0, 2.0 and 3.0 open as they were.
-- `beat-lab`: thirteen new checks (the build on the beat and on every hit, voices, restraint after a build, every ending, the loop seam of Leave on the beat, collage shapes and poses, fitting 50 to 150 slides, Loose, the presets, 3.0 projects in 6.0, words that pop and reveal) and transparent exports checked as Drift checks them. CI captures the new Looks, builds, endings, collages and titles in a 1080×1920 Reel with 2576×1080, 1920×1080 and mixed slides.
+- `beat-lab`: thirteen new checks (the build on the beat and on every hit, voices, restraint after a build, every ending, the loop seam of Leave on the beat, collage shapes and poses, fitting 50 to 150 slides, Loose, the presets, 3.0 projects in 6.0, words that pop and reveal) and transparent exports checked as Drift checks them. `beat-lab bench` times Mosaic on collages of 60 and 100 mixed slides. CI captures the new Looks, builds, endings, collages and titles in a 1080×1920 Reel with 2576×1080, 1920×1080 and mixed slides.
 
 ## 3.0.1 (2026-10-06)
 
