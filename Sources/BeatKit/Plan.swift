@@ -345,19 +345,18 @@ public enum Choreographer {
         var first = [Int](repeating: 0, count: n)
         do {
             let perm = rng.shuffled(slideCount)
-            for c in layout.cells {
-                switch s.grid.order {
-                case .shuffle:
-                    first[c.index] = slideCount >= n ? perm[c.index] : perm[(c.index + 2 * c.row) % slideCount]
-                default:
-                    first[c.index] = slideCount >= n ? c.index : (c.index + 2 * c.row) % slideCount
-                }
-            }
-            if coverSlide != 0, !first.contains(coverSlide) { first[0] = coverSlide }
             let middle = s.grid.order == .coverCentre || (s.grid.order == .reading && layout.rows % 2 == 1 && layout.columns % 2 == 1)
-            if middle, n > 1 {
-                let centre = layout.centreCell
-                if let at = first.firstIndex(of: coverSlide) { first.swapAt(at, centre) } else { first[centre] = coverSlide }
+            if slideCount >= n {
+                for c in layout.cells { first[c.index] = s.grid.order == .shuffle ? perm[c.index] : c.index }
+                if coverSlide != 0, !first.contains(coverSlide) { first[0] = coverSlide }
+                if middle, n > 1 {
+                    let centre = layout.centreCell
+                    if let at = first.firstIndex(of: coverSlide) { first.swapAt(at, centre) } else { first[centre] = coverSlide }
+                }
+            } else {
+                let pin = middle && n > 1 ? (cell: layout.centreCell, slide: coverSlide) : nil
+                let order = Self.spread(slideCount, over: layout, pin: pin)
+                first = s.grid.order == .shuffle ? order.map { perm[$0] } : order
             }
         }
         let cover = first.firstIndex(of: coverSlide) ?? 0
@@ -463,22 +462,22 @@ public enum Choreographer {
             let candidates = (pool ?? Array(0..<n)).filter { t - lastLit[$0] > recent }
             guard !candidates.isEmpty, k > 0 else { return [] }
             let ordered = candidates.sorted { (lastLit[$0], tieBreak[$0]) < (lastLit[$1], tieBreak[$1]) }
-            let window = Array(ordered.prefix(max(k * 2, Int((Double(n) * 0.3).rounded(.up)))))
-            var chosen: [Int] = []
-            var remaining = window
+            var remaining = Array(ordered.prefix(max(k * 2, Int((Double(n) * 0.3).rounded(.up)))))
+            var chosen = [remaining.removeFirst()]
+            // Each candidate's distance to the nearest cell chosen so far.
+            var nearest = remaining.map { simdLength(layout.cells[$0].centre - layout.cells[chosen[0]].centre) }
             while chosen.count < k, !remaining.isEmpty {
-                if chosen.isEmpty {
-                    chosen.append(remaining.removeFirst())
-                    continue
-                }
                 var best = 0, bestD: Float = -1
-                for (j, c) in remaining.enumerated() {
-                    let d = chosen.map { simdLength(layout.cells[$0].centre - layout.cells[c].centre) }.min() ?? 0
+                for j in remaining.indices {
                     // Waiting longer counts a little, so spacing never starves a cell.
-                    let score = d + Float(j == 0 ? 0.02 : 0)
+                    let score = nearest[j] + Float(j == 0 ? 0.02 : 0)
                     if score > bestD { bestD = score; best = j }
                 }
-                chosen.append(remaining.remove(at: best))
+                let c = remaining.remove(at: best)
+                nearest.remove(at: best)
+                chosen.append(c)
+                let at = layout.cells[c].centre
+                for j in remaining.indices { nearest[j] = min(nearest[j], simdLength(layout.cells[remaining[j]].centre - at)) }
             }
             return chosen
         }
@@ -667,12 +666,22 @@ public enum Choreographer {
         // MARK: Restraint: outside the intro and drops, at most 40 % of the grid lit at once.
         if s.mode != .equaliser, n >= 3 {
             let cap = max(1, Int(Float(n) * 0.4))
-            var all: [(c: Int, g: Trigger)] = []
-            for c in 0..<n { for g in cellsTriggers[c] where !g.glint { all.append((c, g)) } }
+            var all: [(c: Int, k: Int)] = []
+            for c in 0..<n { for (k, g) in cellsTriggers[c].enumerated() where !g.glint { all.append((c, k)) } }
+            func trigger(_ e: (c: Int, k: Int)) -> Trigger { cellsTriggers[e.c][e.k] }
             // Same moment: the strongest first, so the weakest are the ones dropped.
-            all.sort { $0.g.time != $1.g.time ? $0.g.time < $1.g.time : $0.g.amp > $1.g.amp }
+            all.sort {
+                let a = trigger($0), b = trigger($1)
+                return a.time != b.time ? a.time < b.time : (a.amp != b.amp ? a.amp > b.amp : $0.c < $1.c)
+            }
             var litUntil = [Double](repeating: -100, count: n)
-            var dropped = Set<String>()
+            var dropped = cellsTriggers.map { [Bool](repeating: false, count: $0.count) }
+            var anyDropped = false
+            // Cells above half, counted as they come up and as they fall back
+            // (oldest first off a heap; entries a later trigger outlasted are skipped).
+            var lit = 0
+            var falling = Expiries()
+            var stamp = [Int](repeating: -1, count: n)
             // The light is past half a little before its trigger, so a cell counts from there.
             let lead = max(s.motion.attack, 0.001) * 0.7
             var i = 0
@@ -681,25 +690,46 @@ public enum Choreographer {
                 // them light or none do, so the ring stays round.
                 var j = i + 1
                 if s.mode == .ripple {
-                    while j < all.count, abs(all[j].g.time - all[i].g.time) < 0.002, abs(all[j].g.amp - all[i].g.amp) < 0.02 { j += 1 }
+                    let first = trigger(all[i])
+                    while j < all.count, abs(trigger(all[j]).time - first.time) < 0.002, abs(trigger(all[j]).amp - first.amp) < 0.02 { j += 1 }
                 }
                 let group = all[i..<j]
-                let from = all[i].g.time - lead
-                let members = Set(group.map(\.c))
-                let busy = (0..<n).filter { !members.contains($0) && litUntil[$0] > from }.count
-                let fresh = group.filter { $0.g.amp > 0.5 && litUntil[$0.c] <= from }.count
+                let from = trigger(all[i]).time - lead
+                while let e = falling.first, e.until <= from {
+                    falling.removeFirst()
+                    if litUntil[e.cell] == e.until { lit -= 1 }
+                }
+                var litMembers = 0, fresh = 0
+                for e in group {
+                    let up = litUntil[e.c] > from
+                    if up, stamp[e.c] != i { litMembers += 1 }
+                    stamp[e.c] = i
+                    if !up, trigger(e).amp > 0.5 { fresh += 1 }
+                }
+                let busy = lit - litMembers
                 if busy >= cap || busy + fresh > cap {
-                    for (c, g) in group where litUntil[c] <= from && g.amp > 0 { dropped.insert("\(c)|\(g.time)") }
+                    for e in group where litUntil[e.c] <= from && trigger(e).amp > 0 {
+                        dropped[e.c][e.k] = true
+                        anyDropped = true
+                    }
                 } else {
                     // Above half until the envelope has fallen by half.
-                    for (c, g) in group where g.amp > 0.5 {
-                        litUntil[c] = max(litUntil[c], g.time + g.hold + g.release * Double(log(2 * g.amp)) / 3)
+                    for e in group {
+                        let g = trigger(e)
+                        guard g.amp > 0.5 else { continue }
+                        let until = g.time + g.hold + g.release * Double(log(2 * g.amp)) / 3
+                        guard until > litUntil[e.c] else { continue }
+                        if litUntil[e.c] <= from { lit += 1 }
+                        litUntil[e.c] = until
+                        falling.insert(until: until, cell: e.c)
                     }
                 }
                 i = j
             }
-            if !dropped.isEmpty {
-                for c in 0..<n { cellsTriggers[c].removeAll { !$0.glint && dropped.contains("\(c)|\($0.time)") } }
+            if anyDropped {
+                for c in 0..<n where dropped[c].contains(true) {
+                    cellsTriggers[c] = cellsTriggers[c].indices.filter { !dropped[c][$0] }.map { cellsTriggers[c][$0] }
+                }
             }
         }
 
@@ -793,16 +823,18 @@ public enum Choreographer {
                 k += 1
                 guard d < outroStart - bar else { break }
                 let count = min(perBar, slideCount - n)
-                // Resting cells only, the longest unchanged first.
+                // A slide out front comes back to the card it left, and is not dealt onto another meanwhile.
+                let featured = Set(features.filter { $0.liftOff < d + 1 && $0.end > d - 0.2 }.map(\.slide))
+                // Resting cells only, the longest unchanged first. The cover stays
+                // put: the clip begins and ends on it.
                 let resting = (0..<n).filter { c in
-                    // The cover stays put: the clip begins and ends on it.
-                    c != cover && !cellsTriggers[c].contains { !$0.glint && $0.amp > 0.3 && $0.time > d - release * 0.6 && $0.time < d + flipTime + 0.4 } &&
-                        !features.contains { $0.liftOff < d + 1 && $0.end > d - 0.2 && first[c] == $0.slide }
+                    c != cover && !featured.contains(showing[c]) &&
+                        !cellsTriggers[c].contains { !$0.glint && $0.amp > 0.3 && $0.time > d - release * 0.6 && $0.time < d + flipTime + 0.4 }
                 }.sorted { (lastSwap[$0], tieBreak[$0]) < (lastSwap[$1], tieBreak[$1]) }
                 for (i, c) in resting.prefix(count).enumerated() {
                     if queue.isEmpty { queue = Array(0..<slideCount).filter { !showing.contains($0) } }
-                    guard !queue.isEmpty else { break }
-                    let next = queue.removeFirst()
+                    guard let pick = queue.firstIndex(where: { !featured.contains($0) }) else { break }
+                    let next = queue.remove(at: pick)
                     queue.append(showing[c])
                     let t = d + Double(i) * sixteenth + flipTime / 2
                     swaps[c].append(Swap(time: t, slide: next))
@@ -817,7 +849,7 @@ public enum Choreographer {
             features[i].cell = (0..<n).first { c in
                 var slide = first[c]
                 for w in swaps[c] where w.time <= f.liftOff { slide = w.slide }
-                return slide == f.slide && !swaps[c].contains { abs($0.time - f.liftOff) < 1 }
+                return slide == f.slide && !swaps[c].contains { $0.time > f.liftOff - 1 && $0.time < f.end + flipTime }
             }
         }
 
@@ -878,4 +910,94 @@ public enum Choreographer {
 @inline(__always) func smoothstep(_ a: Float, _ b: Float, _ x: Float) -> Float {
     let t = min(max((x - a) / max(b - a, 1e-5), 0), 1)
     return t * t * (3 - 2 * t)
+}
+
+extension Choreographer {
+    /// A deck smaller than the grid, dealt in reading order: every slide shows
+    /// before any shows twice, and a repeat never sits next to itself where
+    /// another slide can go there. `pin` holds one slide in one cell, such as
+    /// the cover in the middle.
+    static func spread(_ slides: Int, over layout: GridLayout, pin: (cell: Int, slide: Int)? = nil) -> [Int] {
+        // Dealing greedily can corner itself next to the pinned slide; deal
+        // again from the next slide along until no repeat sits beside itself.
+        var best: (deal: [Int], beside: Int)?
+        for start in 0..<slides {
+            let deal = Self.deal(slides, over: layout, pin: pin, from: start)
+            let beside = layout.cells.filter { c in
+                (c.column > 0 && deal[c.index] == deal[c.index - 1]) || (c.row > 0 && deal[c.index] == deal[c.index - layout.columns])
+            }.count
+            if beside < best?.beside ?? .max { best = (deal, beside) }
+            if beside == 0 { break }
+        }
+        return best?.deal ?? []
+    }
+
+    private static func deal(_ slides: Int, over layout: GridLayout, pin: (cell: Int, slide: Int)?, from start: Int) -> [Int] {
+        let n = layout.cells.count, columns = layout.columns
+        var out = [Int](repeating: -1, count: n)
+        var uses = [Int](repeating: 0, count: slides)
+        if let pin {
+            out[pin.cell] = pin.slide
+            uses[pin.slide] += 1
+        }
+        var next = start % slides
+        for c in 0..<n where c != pin?.cell {
+            let row = c / columns, column = c % columns
+            // Side by side or above and below, then corner to corner.
+            var beside: [Int] = [], corner: [Int] = []
+            for dr in -1...1 {
+                for dc in -1...1 where dr != 0 || dc != 0 {
+                    let r2 = row + dr, c2 = column + dc
+                    guard r2 >= 0, c2 >= 0, c2 < columns, r2 * columns + c2 < n else { continue }
+                    let slide = out[r2 * columns + c2]
+                    guard slide >= 0 else { continue }
+                    if dr == 0 || dc == 0 { beside.append(slide) } else { corner.append(slide) }
+                }
+            }
+            let least = uses.min() ?? 0
+            let candidates = (0..<slides).map { (next + $0) % slides }.filter { uses[$0] == least }
+            let pick = candidates.first { !beside.contains($0) && !corner.contains($0) }
+                ?? candidates.first { !beside.contains($0) }
+                ?? candidates.first
+                ?? next
+            out[c] = pick
+            uses[pick] += 1
+            next = (pick + 1) % slides
+        }
+        return out
+    }
+}
+
+/// When lit cells fall back below half, soonest first: a binary min-heap.
+struct Expiries {
+    private var items: [(until: Double, cell: Int)] = []
+
+    var first: (until: Double, cell: Int)? { items.first }
+
+    mutating func insert(until: Double, cell: Int) {
+        items.append((until, cell))
+        var i = items.count - 1
+        while i > 0 {
+            let parent = (i - 1) / 2
+            guard items[i].until < items[parent].until else { break }
+            items.swapAt(i, parent)
+            i = parent
+        }
+    }
+
+    mutating func removeFirst() {
+        guard !items.isEmpty else { return }
+        items.swapAt(0, items.count - 1)
+        items.removeLast()
+        var i = 0
+        while true {
+            let l = 2 * i + 1, r = l + 1
+            var m = i
+            if l < items.count, items[l].until < items[m].until { m = l }
+            if r < items.count, items[r].until < items[m].until { m = r }
+            guard m != i else { break }
+            items.swapAt(i, m)
+            i = m
+        }
+    }
 }

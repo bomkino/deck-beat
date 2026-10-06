@@ -30,6 +30,9 @@ public final class TileRenderer: @unchecked Sendable {
         }
     }
 
+    /// A still drawn earlier under `key`, if it is still kept.
+    public func cachedImage(_ key: String) -> CGImage? { cached(key) }
+
     /// A still of a composition at `time`.
     public func still(key: String, comp: Composition, time: Double, size: CGSize, samples: Int = 1,
                       completion: @escaping @MainActor (CGImage?) -> Void) {

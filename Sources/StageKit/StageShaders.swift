@@ -235,7 +235,9 @@ fragment float4 card_fragment(CardVOut in [[stage_in]], bool facing [[front_faci
     // Defocus from depth, plus any per-card blur.
     float coc = 0.0;
     if (f.dof.y > 0.0) {
-        float defocus = abs(in.viewDist - f.dof.x) / max(in.viewDist, 1e-3);
+        // From the interpolated position, exact however coarse the mesh.
+        float viewDist = length(in.worldPos - f.eye.xyz);
+        float defocus = abs(viewDist - f.dof.x) / max(viewDist, 1e-3);
         coc = min(defocus * f.dof.y, f.dof.z);
     }
     coc += c.fx.y;

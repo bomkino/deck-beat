@@ -16,6 +16,9 @@ public final class StageRenderer {
     private let grid: MTLBuffer
     private let gridIndices: MTLBuffer
     private let gridIndexCount: Int
+    /// The grid's four corners as two triangles, for cards that stay flat:
+    /// the same surface without thousands of slivers to rasterise.
+    private let quadIndices: MTLBuffer
 
     private lazy var white: MTLTexture = {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 4, height: 4, mipmapped: false)
@@ -64,7 +67,23 @@ public final class StageRenderer {
         grid = GPU.shared.device.makeBuffer(bytes: verts, length: verts.count * MemoryLayout<SIMD2<Float>>.stride)!
         gridIndices = GPU.shared.device.makeBuffer(bytes: idx, length: idx.count * 4)!
         gridIndexCount = idx.count
+        let corner = UInt32(rows * (cols + 1))
+        let quad: [UInt32] = [0, UInt32(cols), corner, UInt32(cols), corner + UInt32(cols), corner]
+        quadIndices = GPU.shared.device.makeBuffer(bytes: quad, length: quad.count * 4)!
     }
+
+    /// Draws a card's surface: the fine grid when it bends, two triangles when it is flat.
+    private func drawSurface(_ enc: MTLRenderCommandEncoder, _ cu: CardUniforms) {
+        let flat = cu.deform.w < 0.5 || (abs(cu.deform.x) <= 0.002 && abs(cu.deform.y) < 1e-5)
+        if flat, flatQuads {
+            enc.drawIndexedPrimitives(type: .triangle, indexCount: 6, indexType: .uint32, indexBuffer: quadIndices, indexBufferOffset: 0)
+        } else {
+            enc.drawIndexedPrimitives(type: .triangle, indexCount: gridIndexCount, indexType: .uint32, indexBuffer: gridIndices, indexBufferOffset: 0)
+        }
+    }
+
+    /// Flat cards drawn as two triangles; off draws every card on the fine grid (for A/B timing).
+    public var flatQuads = true
 
     public func warmUp() {
         backdrop.warmUp()
@@ -260,7 +279,7 @@ public final class StageRenderer {
                 enc.setFragmentBytes(&cu, length: MemoryLayout<CardUniforms>.stride, index: 2)
                 enc.setFragmentTexture(tex, index: 0)
                 enc.setFragmentSamplerState(sampler, index: 0)
-                enc.drawIndexedPrimitives(type: .triangle, indexCount: gridIndexCount, indexType: .uint32, indexBuffer: gridIndices, indexBufferOffset: 0)
+                drawSurface(enc, cu)
             }
         }
 
@@ -304,14 +323,14 @@ public final class StageRenderer {
                 enc.setFragmentBytes(&eu, length: MemoryLayout<CardUniforms>.stride, index: 2)
                 enc.setFragmentTexture(tex, index: 0)
                 enc.setFragmentSamplerState(sampler, index: 0)
-                enc.drawIndexedPrimitives(type: .triangle, indexCount: gridIndexCount, indexType: .uint32, indexBuffer: gridIndices, indexBufferOffset: 0)
+                drawSurface(enc, eu)
             }
             enc.setRenderPipelineState(p.card)
             enc.setVertexBytes(&cu, length: MemoryLayout<CardUniforms>.stride, index: 2)
             enc.setFragmentBytes(&cu, length: MemoryLayout<CardUniforms>.stride, index: 2)
             enc.setFragmentTexture(tex, index: 0)
             enc.setFragmentSamplerState(sampler, index: 0)
-            enc.drawIndexedPrimitives(type: .triangle, indexCount: gridIndexCount, indexType: .uint32, indexBuffer: gridIndices, indexBufferOffset: 0)
+            drawSurface(enc, cu)
         }
         }
         enc.endEncoding()

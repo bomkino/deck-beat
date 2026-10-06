@@ -4,7 +4,7 @@ import StudioKit
 import SwiftUI
 
 enum InspectorPage: String, CaseIterable, Identifiable {
-    case beat, grid, cells, intro, stage
+    case beat, grid, cells, intro, title, stage
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -12,6 +12,7 @@ enum InspectorPage: String, CaseIterable, Identifiable {
         case .grid: return "Grid"
         case .cells: return "Cells"
         case .intro: return "Intro"
+        case .title: return "Title"
         case .stage: return "Stage"
         }
     }
@@ -33,6 +34,7 @@ struct BeatInspector: View {
                     case .grid: GridPage(session: session)
                     case .cells: CellsPage(session: session)
                     case .intro: IntroPage(session: session)
+                    case .title: TitlePage(session: session)
                     case .stage: StagePage(session: session)
                     }
                 }
@@ -117,6 +119,8 @@ struct BeatPage: View {
                 }
             }
             Hairline().padding(.horizontal, 16)
+            SongBeatSection(session: session)
+            Hairline().padding(.horizontal, 16)
             InspectorSection("Slides") {
                 VStack(spacing: 4) {
                     r.slider("Rest light", \.settings.rest.brightness, 0...1.5, reset: 0.4)
@@ -167,6 +171,44 @@ struct BeatPage: View {
     }
 }
 
+/// Corrections for a song whose beat was heard wrong.
+struct SongBeatSection: View {
+    let session: BeatSession
+
+    var body: some View {
+        let r = Rows(session: session)
+        let fix = session.project.beat
+        InspectorSection("Song’s beat", accessory: {
+            if !fix.isNone {
+                Button { session.setBeat("Reset the Beat") { $0 = .none } } label: { Text("Reset").textStyle(.caption) }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Back to the beat as heard")
+            }
+        }) {
+            Text(heard).textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Tempo").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                ChoiceRow(BeatFix.Speed.allCases.map { ($0, $0.title) },
+                          selection: Binding(get: { fix.speed }, set: { v in session.setBeat("Tempo") { $0.speed = v } }))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Bars start on beat").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                ChoiceRow([(0, "1"), (1, "2"), (2, "3"), (3, "4")],
+                          selection: Binding(get: { fix.barShift }, set: { v in session.setBeat("Bar One") { $0.barShift = v } }))
+            }
+            r.seconds("Nudge", \.beat.nudge, Float(BeatFix.nudgeRange.lowerBound)...Float(BeatFix.nudgeRange.upperBound), reset: 0,
+                      format: { v in let ms = Int((v * 1000).rounded()); return ms > 0 ? "+\(ms) ms" : "\(ms) ms" })
+        }
+    }
+
+    private var heard: String {
+        guard let song = session.song, let a = session.analysis else { return "Listening…" }
+        let asHeard = Int(song.analysis.tempo.rounded()), now = Int(a.tempo.rounded())
+        let drops = a.drops.count == 1 ? "1 drop" : "\(a.drops.count) drops"
+        let lead = now == asHeard ? "Heard at \(asHeard) BPM, \(drops)." : "Heard at \(asHeard) BPM, playing at \(now) BPM, \(drops)."
+        return lead + " If the lights miss the beat: halve or double the tempo, move where bars start, or nudge it."
+    }
+}
+
 /// The seven looks, each shown on this deck and song.
 struct LookStrip: View {
     let session: BeatSession
@@ -186,6 +228,7 @@ struct LookCard: View {
     let selected: Bool
     let action: () -> Void
     @State private var image: CGImage?
+    @State private var loading: Task<Void, Never>?
 
     private var key: String {
         var h = Hasher()
@@ -196,6 +239,7 @@ struct LookCard: View {
         h.combine(session.project.format.id)
         h.combine(session.project.settings.grid)
         h.combine(session.project.clip)
+        h.combine(session.project.beat)
         return "look|\(h.finalize())"
     }
 
@@ -220,14 +264,29 @@ struct LookCard: View {
         .onChange(of: key) { _, _ in load() }
     }
 
+    /// Redraws the card once a change settles: a slider drag replans the look
+    /// once at the end, off the main thread, rather than on every step.
     private func load() {
+        loading?.cancel()
         guard session.isReady else { return }
+        let key = self.key
+        if let cached = TileRenderer.shared.cachedImage(key) {
+            image = cached
+            return
+        }
         let p = session.wearing(look, on: session.project)
-        // A square crop of the grid partway in, so the look is mid-song.
-        guard let comp = session.composition(of: p, format: .square) else { return }
-        let time = min(6.5, session.loopDuration(for: .square) * 0.3)
-        TileRenderer.shared.still(key: key, comp: comp, time: time, size: CGSize(width: 280, height: 184)) { img in
-            if let img { image = img }
+        guard let job = session.planJob(for: p, format: .square) else { return }
+        let settle = image == nil ? 0 : 250
+        loading = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(settle))
+            guard !Task.isCancelled else { return }
+            let planned = await Task.detached(priority: .utility) { job() }.value
+            // A square crop of the grid partway in, so the look is mid-song.
+            guard !Task.isCancelled, let comp = session.composition(of: p, format: .square, planned: planned) else { return }
+            let time = min(6.5, planned.plan.length * 0.3)
+            TileRenderer.shared.still(key: key, comp: comp, time: time, size: CGSize(width: 280, height: 184)) { img in
+                if let img { image = img }
+            }
         }
     }
 }
@@ -242,21 +301,30 @@ struct GridPage: View {
         let g = session.project.settings.grid
         VStack(spacing: 0) {
             InspectorSection("Size") {
-                let chips: [(Int, Int, String)] = [(3, 5, "3×5 · 15"), (3, 8, "3×8 · 24"), (4, 8, "4×8 · 30"), (5, 12, "5×12 · 60")]
+                // Sizes of about 15, 24, 30 and 60 cells, shaped for these slides: wide slides get more rows.
+                let presets = presets(for: session)
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
-                    ForEach(chips, id: \.2) { c in
-                        let on = g.columns == c.0 && g.rows == c.1
-                        Button { session.setGrid(columns: c.0, rows: c.1, shape: .auto) } label: {
-                            Text(c.2).textStyle(.caption).foregroundStyle(on ? Color.primary : Color.secondary)
+                    ForEach(presets, id: \.self) { p in
+                        let on = g.columns == p.columns && g.rows == p.rows
+                        Button { session.usePreset(p) } label: {
+                            Text("\(p.columns)×\(p.rows) · \(p.columns * p.rows)").textStyle(.caption).foregroundStyle(on ? Color.primary : Color.secondary)
                                 .frame(maxWidth: .infinity).frame(height: 26)
                                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? Theme.segmentOn : Theme.well.opacity(0.7)))
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                Button { session.fitDeck() } label: { Label("Fit my deck (\(session.project.slides.count) slides)", systemImage: "rectangle.3.group") }
-                    .buttonStyle(QuietButtonStyle())
-                    .padding(.leading, -10)
+                HStack(spacing: 6) {
+                    Button { session.fitDeck() } label: { Label("Fit my deck (\(session.project.slides.count) slides)", systemImage: "rectangle.3.group") }
+                        .buttonStyle(QuietButtonStyle())
+                        .padding(.leading, -10)
+                    if session.project.gridFollowsDeck {
+                        Spacer(minLength: 0)
+                        Label("Follows the deck", systemImage: "checkmark").labelStyle(.titleAndIcon)
+                            .textStyle(.caption).foregroundStyle(.tertiary)
+                            .help("The grid refits as you add or remove slides, until you set its size by hand")
+                    }
+                }
                 HStack {
                     Stepper(value: Binding(get: { g.columns }, set: { session.setGrid(columns: $0, rows: g.rows) }), in: GridSettings.columnRange) {
                         Text("\(g.columns) across").textStyle(.bodyCompact).monospacedDigit()
@@ -274,10 +342,12 @@ struct GridPage: View {
             Hairline().padding(.horizontal, 16)
             InspectorSection("Shape") {
                 VStack(alignment: .leading, spacing: 10) {
-                    r.choice("Cells", \.settings.grid.shape, CellShape.allCases.map { ($0, $0.title) })
-                    if let planned = session.planned(for: session.project.format), g.shape == .auto {
-                        Text(planned.layout.shape == .fill ? "Auto fills the frame: slides are cropped at rest and shown whole when they step forward."
-                             : "Auto keeps every slide whole.")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Cells").textStyle(.bodyCompact).foregroundStyle(.secondary)
+                        ChoiceRow(CellShape.allCases.map { ($0, $0.title) }, selection: Binding(get: { g.shape }, set: { session.setShape($0) }))
+                    }
+                    if let layout = session.planned(for: session.project.format)?.layout {
+                        Text(shapeNote(layout, auto: g.shape == .auto))
                             .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                     }
                     r.choice("Margins", \.settings.grid.margins, Margins.allCases.map { ($0, $0.title) })
@@ -292,6 +362,23 @@ struct GridPage: View {
                     .textStyle(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+extension GridPage {
+    /// About 15, 24, 30 and 60 cells, each fitted to the deck's slide shape, without repeats.
+    func presets(for session: BeatSession) -> [GridSettings] {
+        var seen = Set<Int>()
+        return [15, 24, 30, 60].map { session.gridPreset(about: $0) }.filter { seen.insert($0.columns * 100 + $0.rows).inserted }
+    }
+
+    func shapeNote(_ layout: BeatKit.GridLayout, auto: Bool) -> String {
+        let crop = Int((layout.crop * 100).rounded())
+        if layout.shape == .fill, crop >= 1 {
+            let lead = auto ? "Auto fills the frame" : "Filled cells"
+            return "\(lead): about \(crop)% of each slide is cropped at rest, and it shows whole when it steps forward."
+        }
+        return auto ? "Auto keeps every slide whole." : "Every slide shows whole."
     }
 }
 
@@ -428,7 +515,8 @@ struct IntroPage: View {
 struct StagePage: View {
     let session: BeatSession
 
-    static let backdrops = ["studio", "softbloom", "mesh", "fade", "aurora", "halo", "bloom", "bokeh", "silk", "smoke", "dotgrid", "halftone"]
+    static let backdrops = ["studio", "solid", "linear", "radial", "conic", "softbloom", "mesh", "fade", "aurora", "halo", "bloom", "bokeh",
+                            "silk", "iris", "caustics", "smoke", "dotgrid", "halftone"]
 
     /// A backdrop style's tile, painted in the project's palette.
     static func preview(_ style: BackdropStyle, palette: Palette) -> BackdropSettings {

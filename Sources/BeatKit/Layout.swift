@@ -2,6 +2,19 @@ import Foundation
 
 /// Where every cell sits on a canvas, in world units: the canvas is 1 tall and
 /// `aspect` wide, centred on the origin, +y up.
+/// Room kept clear at the top and bottom of the frame, as shares of its height.
+public struct Clearance: Hashable, Sendable {
+    public var top: Float
+    public var bottom: Float
+
+    public init(top: Float = 0, bottom: Float = 0) {
+        self.top = top
+        self.bottom = bottom
+    }
+
+    public static let none = Clearance()
+}
+
 public struct GridLayout: Sendable {
     public struct Cell: Sendable {
         public var index: Int
@@ -37,14 +50,18 @@ public struct GridLayout: Sendable {
     /// Distance from the eye to the canvas plane for the stage's default 35° lens.
     public static let eyeDistance: Float = 0.5 / Float(tan(35.0 * Double.pi / 360))
 
-    public init(settings g: GridSettings, aspect: Float, slideAspect: Float) {
+    /// `clear` keeps the grid off the top and bottom of the frame by at least
+    /// these shares of its height, such as for a caption.
+    public init(settings g: GridSettings, aspect: Float, slideAspect: Float, clear: Clearance = .none) {
         self.aspect = aspect
         let cols = max(1, min(g.columns, 40)), rows = max(1, min(g.rows, 40))
         columns = cols
         self.rows = rows
         self.slideAspect = max(0.2, min(slideAspect, 5))
         px = min(aspect, 1) / 1080
-        let inset = g.margins.insets(aspect: aspect)
+        var inset = g.margins.insets(aspect: aspect)
+        inset.top = max(inset.top, min(clear.top, 0.4))
+        inset.bottom = max(inset.bottom, min(clear.bottom, 0.4))
         let W = aspect * (1 - 2 * inset.side), H = 1 - inset.top - inset.bottom
         safeSize = SIMD2(W, H)
         safeCentre = SIMD2(0, (inset.bottom - inset.top) / 2)
@@ -63,8 +80,13 @@ public struct GridLayout: Sendable {
             return min(gw / W, gh / H)
         }
         var shape = g.shape
-        // Slide-shaped cells when they still cover three quarters of the box both ways.
-        if shape == .auto { shape = coverage(fitted(self.slideAspect)) >= 0.75 ? .slide : .fill }
+        // Slide-shaped cells when they still cover three quarters of the box
+        // both ways, or when filled cells would crop away most of each slide
+        // (wide slides in a tall frame).
+        if shape == .auto {
+            shape = coverage(fitted(self.slideAspect)) >= 0.75 || Self.crop(cell: fillW / max(fillH, 1e-5), slide: self.slideAspect) > 0.4
+                ? .slide : .fill
+        }
         self.shape = shape
         let size: SIMD2<Float>
         switch shape {
@@ -154,30 +176,66 @@ public struct GridLayout: Sendable {
         return d.map { $0 / far }
     }
 
-    /// "Fit my deck": the slide-shaped grid with the widest cells that holds
-    /// `count` slides with fewer than a row spare and still covers three
-    /// quarters of the box both ways; otherwise a filled grid three to six
-    /// columns wide.
-    public static func fit(count: Int, aspect: Float, slideAspect: Float, base: GridSettings) -> (columns: Int, rows: Int, shape: CellShape) {
+    /// The share of a slide a filled cell of `cell` aspect crops away.
+    public static func crop(cell: Float, slide: Float) -> Float {
+        1 - min(cell / max(slide, 1e-5), slide / max(cell, 1e-5))
+    }
+
+    /// The share of each slide its cell crops away (0 for slide-shaped cells).
+    public var crop: Float { shape == .fill ? Self.crop(cell: cellAspect, slide: slideAspect) : 0 }
+
+    /// "Fit my deck": a grid that holds `count` slides with less than a row
+    /// spare. The slide-shaped grid with the widest cells that still covers
+    /// three quarters of the box both ways; otherwise the filled grid that
+    /// crops the least, if it keeps at least 65 % of each slide; otherwise
+    /// the slide-shaped grid that covers the most of the box, so wide slides
+    /// in a tall frame are never cut in half.
+    public static func fit(count: Int, aspect: Float, slideAspect: Float, base: GridSettings,
+                           clear: Clearance = .none) -> (columns: Int, rows: Int, shape: CellShape) {
         let n = max(1, count)
-        var best: (columns: Int, rows: Int)?
-        var widest: Float = 0
-        for c in 2...8 {
+        var covering: (columns: Int, rows: Int, width: Float)?
+        var filled: (columns: Int, rows: Int, crop: Float, width: Float)?
+        var open: (columns: Int, rows: Int, area: Float)?
+        for c in 1...8 where c <= n {
             let r = Int((Double(n) / Double(c)).rounded(.up))
-            guard r <= 20, c * r - n <= c - 1 else { continue }
+            guard r <= 20 else { continue }
             var g = base
             g.columns = c
             g.rows = r
             g.shape = .slide
-            let layout = GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect)
-            let cover = min(layout.gridSize.x / layout.safeSize.x, layout.gridSize.y / layout.safeSize.y)
-            let w = layout.cells[0].size.x
-            if cover >= 0.75, w > widest + 1e-5 { widest = w; best = (c, r) }
+            let slide = GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect, clear: clear)
+            let cover = SIMD2(slide.gridSize.x / slide.safeSize.x, slide.gridSize.y / slide.safeSize.y)
+            let w = slide.cells[0].size.x
+            if min(cover.x, cover.y) >= 0.75, w > (covering?.width ?? 0) + 1e-5 { covering = (c, r, w) }
+            if cover.x * cover.y > (open?.area ?? 0) + 1e-5 { open = (c, r, cover.x * cover.y) }
+            g.shape = .fill
+            let fill = GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect, clear: clear)
+            let crop = fill.crop
+            if crop <= 0.35, filled == nil || crop < filled!.crop - 0.02 || (crop < filled!.crop + 0.02 && fill.cells[0].size.x > filled!.width) {
+                filled = (c, r, crop, fill.cells[0].size.x)
+            }
         }
-        if let best { return (best.columns, best.rows, .slide) }
-        let c = n <= 18 ? 3 : (n <= 36 ? 4 : (n <= 60 ? 5 : 6))
-        return (c, min(20, Int((Double(n) / Double(c)).rounded(.up))), .fill)
+        if let covering { return (covering.columns, covering.rows, .slide) }
+        if let filled { return (filled.columns, filled.rows, .fill) }
+        if let open { return (open.columns, open.rows, .slide) }
+        return (1, min(n, 20), .slide)
     }
 }
 
 @inline(__always) func simdLength(_ v: SIMD2<Float>) -> Float { (v.x * v.x + v.y * v.y).squareRoot() }
+
+public extension GridSettings {
+    /// This grid refitted to a deck of `count` slides of `slideAspect` on a
+    /// canvas of `aspect`. The shape stays Auto wherever Auto already lands on
+    /// the fitted shape, so the grid keeps working across canvas formats.
+    /// `clear` is the room a caption keeps at the top or foot of the frame.
+    func fitted(count: Int, aspect: Float, slideAspect: Float, clear: Clearance = .none) -> GridSettings {
+        let f = GridLayout.fit(count: count, aspect: aspect, slideAspect: slideAspect, base: self, clear: clear)
+        var g = self
+        g.columns = f.columns
+        g.rows = f.rows
+        g.shape = .auto
+        if GridLayout(settings: g, aspect: aspect, slideAspect: slideAspect, clear: clear).shape != f.shape { g.shape = f.shape }
+        return g
+    }
+}

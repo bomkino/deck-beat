@@ -194,11 +194,20 @@ public struct BeatScene: StageScene {
             }
         }
 
-        // Size: the cell, scaled, opening towards the slide's own shape.
+        // Size: the cell, scaled, opening towards the slide's own shape. A slide
+        // much wider (or taller) than its cell opens to half as wide again and
+        // gives up height for the rest, so it never sprawls over its row.
         var size = geometry.size * scale
         if open > 0.001 {
-            let a = geometry.size.x / geometry.size.y
-            if itemAspect > a { size.x = mix(size.x, size.y * itemAspect, open) } else { size.y = mix(size.y, size.x / itemAspect, open) }
+            var whole = size
+            if itemAspect > size.x / size.y {
+                whole.x = min(size.y * itemAspect, size.x * 1.5)
+                whole.y = whole.x / itemAspect
+            } else {
+                whole.y = min(size.x / itemAspect, size.y * 1.5)
+                whole.x = whole.y * itemAspect
+            }
+            size = SIMD2(mix(size.x, whole.x, open), mix(size.y, whole.y, open))
         }
 
         // Lean away from where the light came from, or a seeded way.
@@ -301,8 +310,10 @@ public struct BeatScene: StageScene {
     func coverHero(_ card: CardPose, geometry: GridLayout.Cell, amount: Float, kick: Float, push: Float, ctx: SceneContext) -> CardPose {
         var card = card
         let aspect = card.mediaAspect
-        let big = layout.heroSize(aspect: aspect)
-        let centre = SIMD3(layout.safeCentre.x, layout.safeCentre.y, Float(0.06))
+        // Sized as the camera sees it, a little in front of the grid.
+        let k = Self.seen(0.06)
+        let big = layout.heroSize(aspect: aspect) / k
+        let centre = SIMD3(layout.safeCentre.x / k, layout.safeCentre.y / k, Float(0.06))
         // From frame 1 it is already moving: a slow push in, and a punch on the kick.
         let grow = 1 + 0.03 * min(max(push, 0), 1) + 0.015 * kick
         let a = min(max(amount, 0), 1)
@@ -402,16 +413,19 @@ public struct BeatScene: StageScene {
         let geometry = cell.map { layout.cells[$0] }
         let home = geometry.map { layout.place(SIMD3($0.centre.x, $0.centre.y, 0)) } ?? layout.place(.zero)
         let homeSize = geometry?.size ?? big * 0.3
-        // Centred across, and most of the way from its cell to the middle of the box, kept inside it.
-        var y = mix(home.y, layout.safeCentre.y, spot ? 0.85 : 0.6)
+        // Worked out as the camera sees it, so lifting it towards the lens never
+        // makes it bigger than planned: from its cell to the middle of the box,
+        // centred across and kept inside it.
+        let homeSeen = SIMD2(home.x, home.y) * Self.seen(home.z), homeSizeSeen = homeSize * s.rest.scale * Self.seen(home.z)
+        var y = mix(homeSeen.y, layout.safeCentre.y, spot ? 0.85 : 0.6)
         let room = max(layout.safeSize.y / 2 - big.y / 2, 0)
         y = min(max(y, layout.safeCentre.y - room), layout.safeCentre.y + room)
-        let out = SIMD3(layout.safeCentre.x, y, 0)
-        var position = mix3(home, out, p.position)
-        position.z = 0.25 * p.lift
+        let seen = homeSeen + (SIMD2(layout.safeCentre.x, y) - homeSeen) * p.position
+        let z = mix(home.z, 0.25, p.lift)
+        let k = Self.seen(z)
         let grow = 1 + 0.015 * kick * p.amount
-        let size = SIMD2(mix(homeSize.x * s.rest.scale, big.x, p.position), mix(homeSize.y * s.rest.scale, big.y, p.position)) * grow
-        var card = CardPose(media: slide, occurrence: occurrence, position: position,
+        let size = (homeSizeSeen + (big - homeSizeSeen) * p.position) * grow / k
+        var card = CardPose(media: slide, occurrence: occurrence, position: SIMD3(seen.x / k, seen.y / k, z),
                             rotation: layout.wallRotation * (1 - p.amount), size: SIMD2(max(size.x, 0.001), max(size.y, 0.001)))
         card.mediaAspect = aspect
         card.fit = .fill
@@ -428,6 +442,13 @@ public struct BeatScene: StageScene {
     }
 
     // MARK: Helpers
+
+    /// How much larger the resting camera shows something `z` in front of the
+    /// canvas than the same thing on it.
+    static func seen(_ z: Float) -> Float {
+        let d = GridLayout.eyeDistance
+        return d / max(d - z, 0.2)
+    }
 
     /// The gel over a slide lit by `L`, as a linear multiplier.
     func gel(_ L: Float) -> SIMD3<Float> {

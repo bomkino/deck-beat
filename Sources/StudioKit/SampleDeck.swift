@@ -32,11 +32,15 @@ enum SampleDeck {
                      height H: CGFloat, tracking: CGFloat = 0, lineHeight: CGFloat = 1.1, align: CTTextAlignment = .left) -> CGFloat {
         var alignment = align
         var multiple = lineHeight
-        let settings = [
-            CTParagraphStyleSetting(spec: .alignment, valueSize: MemoryLayout<CTTextAlignment>.size, value: &alignment),
-            CTParagraphStyleSetting(spec: .lineHeightMultiple, valueSize: MemoryLayout<CGFloat>.size, value: &multiple),
-        ]
-        let para = CTParagraphStyleCreate(settings, settings.count)
+        let para = withUnsafeBytes(of: &alignment) { a in
+            withUnsafeBytes(of: &multiple) { m in
+                let settings = [
+                    CTParagraphStyleSetting(spec: .alignment, valueSize: a.count, value: a.baseAddress!),
+                    CTParagraphStyleSetting(spec: .lineHeightMultiple, valueSize: m.count, value: m.baseAddress!),
+                ]
+                return CTParagraphStyleCreate(settings, settings.count)
+            }
+        }
         let attrs: [NSAttributedString.Key: Any] = [
             NSAttributedString.Key(kCTFontAttributeName as String): font,
             NSAttributedString.Key(kCTForegroundColorAttributeName as String): color,

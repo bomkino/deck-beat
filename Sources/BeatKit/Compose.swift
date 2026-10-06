@@ -83,10 +83,10 @@ public enum Composer {
 
     /// The choreography for a clip of `song` on a canvas of `aspect`.
     public static func plan(_ a: SongAnalysis, settings: BeatSettings, clip: ClipRange, aspect: Float, slideAspect: Float,
-                            slides: Int, starred: Set<Int> = []) -> (layout: GridLayout, plan: BeatPlan) {
+                            slides: Int, starred: Set<Int> = [], clear: Clearance = .none) -> (layout: GridLayout, plan: BeatPlan) {
         var s = settings
         s.outro = clip.outro
-        let layout = GridLayout(settings: s.grid, aspect: aspect, slideAspect: slideAspect)
+        let layout = GridLayout(settings: s.grid, aspect: aspect, slideAspect: slideAspect, clear: clear)
         let plan = Choreographer.plan(a, settings: s, layout: layout, slides: slides, clipStart: clip.start, clipLength: clip.length,
                                       starred: starred)
         return (layout, plan)
