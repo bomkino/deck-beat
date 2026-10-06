@@ -69,26 +69,48 @@ public struct IntroPlan: Sendable {
     public var end: Double
     /// Per cell, when it lands.
     public var landings: [Double]
+    /// The usual flight, and each card's own (by its voice, loosened by Feel).
     public var flight: Double
+    public var flights: [Double]
     public var coldOpen: Bool
     public var coverCell: Int
     /// When the cover starts back to its cell.
     public var coverMove: Double
+    public var pace: IntroPace
+    /// Per cell, the sound that placed it: low (kick), mid (snare) or high (hats).
+    public var voices: [Register]
+    /// The cells in the order they land, the cover last.
+    public var order: [Int]
+    /// Beats between landing slots in a build (0 for a deal).
+    public var step: Double
+    /// Where the build began: its first beat, left empty.
+    public var buildStart: Double
 }
 
 public struct OutroPlan: Sendable {
     public var kind: Outro
     /// When the outro begins; the clip's length when there is none.
     public var start: Double
-    /// Close: per cell, when it starts to leave. Lights out: when it starts to go dark.
+    /// Close, leave, curtain call, drift away: per cell, when it starts to
+    /// leave. Lights out: when it starts to go dark. Past the clip for a card that stays.
     public var leaves: [Double]
     public var flight: Double
-    /// Close: when the cover starts to rise, to be held up over the last moments.
+    /// Per cell, how long it takes to leave.
+    public var flights: [Double]
+    /// Curtain call: per cell, when its bow peaks.
+    public var bows: [Double]
+    /// Per cell, its place in the order of leaving (0 first), so cards in
+    /// flight ride over each other in a fixed order.
+    public var rank: [Int]
+    /// Close, curtain call, drift away: when the cover starts to rise, to be
+    /// held up over the last moments.
     public var coverRise: Double
-    /// The last downbeat, where the end card lands.
+    /// The last downbeat, where the end card lands (curtain call: where the cover bows).
     public var end: Double
     /// Lights out: how long a slide takes to go dark.
     public var fade: Double
+    /// The cover holds up front to the end.
+    public var coverHolds: Bool
 }
 
 public final class BeatPlan: @unchecked Sendable {
@@ -367,23 +389,81 @@ public enum Choreographer {
             if let i = downbeats.firstIndex(where: { $0 >= -0.05 }), i + k < downbeats.count { return downbeats[i + k] }
             return firstDown + Double(k) * bar
         }
-        var introBars = s.intro.bars
-        if introBars <= 0 {
-            // The fewest of 1, 2 or 4 bars that give the deal room to read.
-            introBars = 1
-            while introBars < 4, downbeat(barsAfterFirst: introBars) - max(firstDown, 0) < 1.6 { introBars *= 2 }
-        }
         let freeTime = song.confidence < 0.4 || downbeats.isEmpty
-        var introEnd = downbeat(barsAfterFirst: introBars)
-        if freeTime { introEnd = 2.0 }
-        introEnd = min(introEnd, length * 0.4)
-        let flight = freeTime ? 0.45 : min(max(period, 0.35), 0.6)
+        let builds = s.intro.pace.builds
+        let feel = Double(min(max(s.motion.feel, 0), 1))
+        /// A seeded 0…1 per cell, apart from the plan's own sequence so older plans keep their timing.
+        func unit(_ c: Int, _ salt: UInt64) -> Double {
+            var r = Seeded(s.seed, salt: salt &+ UInt64(c) &* 0x9E37_79B9)
+            return Double(r.unit())
+        }
+        // The beats as a continuous count, so a slot between two beats falls where the music does.
+        func position(_ t: Double) -> Double {
+            guard beatTimes.count > 1, !freeTime else { return t / period }
+            let last = beatTimes.count - 1
+            if t <= beatTimes[0] { return (t - beatTimes[0]) / period }
+            if t >= beatTimes[last] { return Double(last) + (t - beatTimes[last]) / period }
+            var lo = 0, hi = last
+            while lo < hi - 1 {
+                let mid = (lo + hi) / 2
+                if beatTimes[mid] <= t { lo = mid } else { hi = mid }
+            }
+            return Double(lo) + (t - beatTimes[lo]) / max(beatTimes[lo + 1] - beatTimes[lo], 1e-3)
+        }
+        func time(_ x: Double) -> Double {
+            guard beatTimes.count > 1, !freeTime else { return x * period }
+            let last = beatTimes.count - 1
+            if x <= 0 { return beatTimes[0] + x * period }
+            if x >= Double(last) { return beatTimes[last] + (x - Double(last)) * period }
+            let i = Int(x.rounded(.down))
+            return beatTimes[i] + (beatTimes[i + 1] - beatTimes[i]) * (x - Double(i))
+        }
+        var introBars = s.intro.bars
+        var introEnd: Double
+        var buildStart = 0.0
+        // A drop in the song that the build lands its last slide on.
+        var buildDrop: Double?
+        if builds {
+            // The board builds from the clip's first beat, left empty so the room is seen first, to the
+            // first drop if it comes four to eight bars in, or over bars sized to the deck.
+            buildStart = freeTime ? 0 : (beatTimes.first(where: { $0 >= -0.05 }) ?? 0)
+            func downbeat(bars k: Int, after t: Double) -> Double {
+                if let i = downbeats.firstIndex(where: { $0 >= t - 0.05 }), i + k < downbeats.count { return downbeats[i + k] }
+                return (downbeats.first(where: { $0 >= t - 0.05 }) ?? t) + Double(k) * bar
+            }
+            let drop = freeTime || s.intro.bars > 0 ? nil : song.drops.map { $0 - start }.first {
+                $0 >= buildStart + bar * 3.9 && $0 <= buildStart + bar * 8.1 && $0 <= length * 0.6
+            }
+            if let d = drop {
+                let snapped = downbeats.min { abs($0 - d) < abs($1 - d) }.flatMap { abs($0 - d) < period * 0.6 ? $0 : nil } ?? d
+                introEnd = snapped
+                buildDrop = snapped
+            } else {
+                var bars = s.intro.bars > 0 ? s.intro.bars : Self.buildBars(cells: n)
+                while bars > 1, downbeat(bars: bars, after: buildStart) > length * 0.5 { bars -= 1 }
+                introEnd = freeTime ? min(Double(bars) * 2, length * 0.5) : downbeat(bars: bars, after: buildStart)
+            }
+            introBars = max(1, Int(((introEnd - firstDown) / bar).rounded()))
+        } else {
+            if introBars <= 0 {
+                // The fewest of 1, 2 or 4 bars that give the deal room to read.
+                introBars = 1
+                while introBars < 4, downbeat(barsAfterFirst: introBars) - max(firstDown, 0) < 1.6 { introBars *= 2 }
+            }
+            introEnd = downbeat(barsAfterFirst: introBars)
+            if freeTime { introEnd = 2.0 }
+            introEnd = min(introEnd, length * 0.4)
+        }
+        let flight = builds ? min(max(period * 0.75, 0.25), 0.5) : (freeTime ? 0.45 : min(max(period, 0.35), 0.6))
         // Order ranks, 0…1.
         let ranks = staggerRanks(layout, order: s.intro.order, rng: &rng)
 
         // MARK: Slides in cells
         var first = [Int](repeating: 0, count: n)
-        do {
+        if layout.arrangement == .collage {
+            // Each collage cell is sized for its own slide, so the deck sits in order.
+            first = (0..<n).map { $0 % slideCount }
+        } else {
             let perm = rng.shuffled(slideCount)
             let middle = s.grid.order == .coverCentre || (s.grid.order == .reading && layout.rows % 2 == 1 && layout.columns % 2 == 1)
             if slideCount >= n {
@@ -401,40 +481,157 @@ public enum Choreographer {
         }
         let cover = first.firstIndex(of: coverSlide) ?? 0
 
-        // Landing slots: the widest musical spacing that fits every card into
-        // the window, the cover home last on the downbeat.
         var landings = [Double](repeating: 0, count: n)
-        let landingOrder = (0..<n).filter { !(s.intro.coldOpen && $0 == cover) }
+        var voices = [Register](repeating: .low, count: n)
+        var buildStep = 0.0
+        let landingOrder = (0..<n).filter { !((builds || s.intro.coldOpen) && $0 == cover) }
             .sorted { (ranks[$0], $0) < (ranks[$1], $1) }
-        let window = max(introEnd - period * 0.5 - flight, 0)
-        let gaps = max(landingOrder.count - (s.intro.coldOpen ? 0 : 1), 1)
         var q = freeTime ? 0.07 : period / 8
-        if !freeTime {
-            for f in [1.0 / 2, 1.0 / 3, 1.0 / 4, 1.0 / 6, 1.0 / 8] where Double(gaps) * f * period <= window + 1e-6 {
-                q = f * period
-                break
+        if builds {
+            // Landing slots on the music, the cover alone and last on the drop.
+            let m = landingOrder.count
+            var slots: [Double] = []
+            if freeTime {
+                slots = (0..<m).map { buildStart + (introEnd - buildStart) * Double($0 + 1) / Double(m + 1) }
+            } else {
+                let x0 = position(buildStart), x1 = position(introEnd)
+                let span = x1 - x0
+                // The coarsest step that fits every slide: a bar, a half note, a beat, an eighth, a sixteenth.
+                buildStep = 0.25
+                for f in [4.0, 2, 1, 0.5, 0.25] where Int((span / f - 1e-3).rounded(.down)) >= m {
+                    buildStep = f
+                    break
+                }
+                let count = max(0, Int((span / buildStep - 1e-3).rounded(.down)))
+                let grid = count > 0 ? (1...count).map { time(x0 + Double($0) * buildStep) } : []
+                if s.intro.pace == .hits {
+                    // The song's own hits, strongest first with a lift for the beat and the
+                    // downbeat, never two within a sixteenth and never crowding one bar.
+                    let lo = buildStart + sixteenth * 0.5, hi = introEnd - sixteenth * 0.5
+                    let ranked = onsets.filter { $0.time > lo && $0.time < hi }.map { o -> (t: Double, score: Float) in
+                        var score = o.strength
+                        if downbeats.contains(where: { abs($0 - o.time) < 0.06 }) { score += 0.3 }
+                        else if beatTimes.contains(where: { abs($0 - o.time) < 0.06 }) { score += 0.15 }
+                        return (o.time, score)
+                    }.sorted { $0.score != $1.score ? $0.score > $1.score : $0.t < $1.t }
+                    let barsLong = max(1, (introEnd - buildStart) / bar)
+                    let perBar = max(2, Int((Double(m) / barsLong * 2).rounded(.up)))
+                    var chosen: [Double] = []
+                    func room(_ t: Double) -> Bool {
+                        guard !chosen.contains(where: { abs($0 - t) < sixteenth * 0.9 }) else { return false }
+                        let b = Int(((t - buildStart) / bar).rounded(.down))
+                        return chosen.filter { Int((($0 - buildStart) / bar).rounded(.down)) == b }.count < perBar
+                    }
+                    for h in ranked where chosen.count < m && room(h.t) { chosen.append(h.t) }
+                    // Too few hits: beats, then eighths, then sixteenths fill in.
+                    if chosen.count < m {
+                        let quarter = Int(((x1 - x0) * 4 - 1e-3).rounded(.down))
+                        var fill: [(t: Double, weight: Int)] = []
+                        if quarter > 0 {
+                            for k in 1...quarter {
+                                let weight = k % 4 == 0 ? 0 : (k % 2 == 0 ? 1 : 2)
+                                fill.append((time(x0 + Double(k) / 4), weight))
+                            }
+                        }
+                        fill.sort { $0.weight != $1.weight ? $0.weight < $1.weight : $0.t < $1.t }
+                        for f in fill where chosen.count < m && !chosen.contains(where: { abs($0 - f.t) < sixteenth * 0.9 }) {
+                            chosen.append(f.t)
+                        }
+                    }
+                    slots = chosen.sorted()
+                } else {
+                    slots = Array(grid.suffix(m))
+                }
             }
+            // More slides than slots: a slot lands a small group, spread across the board.
+            for (i, c) in landingOrder.enumerated() {
+                landings[c] = slots.isEmpty ? introEnd : slots[min(slots.count - 1, i * slots.count / max(m, 1))]
+            }
+            landings[cover] = introEnd
+            if let gap = zip(slots, slots.dropFirst()).map({ $1 - $0 }).filter({ $0 > 0.01 }).min() { q = gap }
+            // Each slide takes the sound that placed it: the strongest onset within 70 ms, or else
+            // its place in the bar: beats one and three low, two and four mid, off the beat high.
+            for c in 0..<n {
+                let t = landings[c]
+                var best: Onset?
+                for o in onsets where abs(o.time - t) <= 0.07 && o.strength > (best?.strength ?? -1) { best = o }
+                if let best {
+                    voices[c] = best.register
+                } else {
+                    let x = position(t)
+                    let frac = x - x.rounded(.down)
+                    if frac > 0.12, frac < 0.88 {
+                        voices[c] = .high
+                    } else {
+                        let beat = clipBeats.min { abs($0.time - start - t) < abs($1.time - start - t) }
+                        voices[c] = (beat?.inBar ?? 0) % 2 == 0 ? .low : .mid
+                    }
+                }
+            }
+        } else {
+            // Landing slots: the widest musical spacing that fits every card into
+            // the window, the cover home last on the downbeat.
+            let window = max(introEnd - period * 0.5 - flight, 0)
+            let gaps = max(landingOrder.count - (s.intro.coldOpen ? 0 : 1), 1)
+            if !freeTime {
+                for f in [1.0 / 2, 1.0 / 3, 1.0 / 4, 1.0 / 6, 1.0 / 8] where Double(gaps) * f * period <= window + 1e-6 {
+                    q = f * period
+                    break
+                }
+            }
+            let slots = min(gaps, max(1, Int((window / q + 1e-6).rounded(.down))))
+            for (i, c) in landingOrder.enumerated() {
+                let slot = gaps > 0 ? Int((Double(i) * Double(slots) / Double(gaps)).rounded(.down)) : 0
+                landings[c] = max(introEnd - Double(slots - slot) * q, flight * 0.5)
+            }
+            if !s.intro.coldOpen, let last = landingOrder.last { landings[last] = introEnd }
+            if s.intro.coldOpen { landings[cover] = introEnd }
+            // A dealt board gets a balanced mix of voices: about 40 % low, 35 % mid, 25 % high.
+            let low = Int((Double(n) * 0.4).rounded()), mid = Int((Double(n) * 0.35).rounded())
+            var mix = (0..<n).map { $0 < low ? Register.low : ($0 < low + mid ? .mid : .high) }
+            var voiceRng = Seeded(s.seed, salt: 0x5EED_B0B)
+            mix = voiceRng.shuffled(n).map { mix[$0] }
+            for (i, c) in (landingOrder + (landingOrder.contains(cover) ? [] : [cover])).enumerated() { voices[c] = mix[i] }
         }
-        let slots = min(gaps, max(1, Int((window / q + 1e-6).rounded(.down))))
-        for (i, c) in landingOrder.enumerated() {
-            let slot = gaps > 0 ? Int((Double(i) * Double(slots) / Double(gaps)).rounded(.down)) : 0
-            landings[c] = max(introEnd - Double(slots - slot) * q , flight * 0.5)
+        // Each card's flight: by its voice when it comes in by sound, loosened by Feel. The landing never moves.
+        var flights = [Double](repeating: flight, count: n)
+        for c in 0..<n {
+            var f = flight
+            if s.intro.entrance == .voices {
+                let share = voices[c] == .low ? 0.75 : (voices[c] == .mid ? 0.5 : 1.0 / 3)
+                f = min(max(period * share, 0.15), 0.45)
+            }
+            if feel > 0 {
+                f *= 1 + 0.3 * feel * (unit(c, 0xF1) * 2 - 1)
+                f += 0.025 * feel * (unit(c, 0xF2) * 2 - 1)
+            }
+            // A build opens on the empty room: nothing is in the air on frame 0.
+            if builds { f = min(f, max(landings[c] - 1.0 / 60, 0.06)) }
+            flights[c] = max(f, 0.06)
         }
-        if !s.intro.coldOpen, let last = landingOrder.last { landings[last] = introEnd }
-        if s.intro.coldOpen { landings[cover] = introEnd }
-        let intro = IntroPlan(end: introEnd, landings: landings, flight: flight, coldOpen: s.intro.coldOpen, coverCell: cover,
-                              coverMove: max(introEnd - flight * 1.25, introEnd * 0.5))
+        let landed = (0..<n).sorted { (landings[$0], ranks[$0], $0) < (landings[$1], ranks[$1], $1) }
+        let intro = IntroPlan(end: introEnd, landings: landings, flight: flight, flights: flights, coldOpen: s.intro.coldOpen,
+                              coverCell: cover, coverMove: max(introEnd - flight * 1.25, introEnd * 0.5), pace: s.intro.pace,
+                              voices: voices, order: landed, step: buildStep, buildStart: buildStart)
 
         // MARK: Outro
         var kind = s.outro
-        if kind == .auto { kind = length <= 30.5 ? .loop : .close }
+        if kind == .auto { kind = length <= 30.5 ? (builds ? .leave : .loop) : (builds ? .curtainCall : .close) }
         var outroStart = length
         var leaves = [Double](repeating: length + 1, count: n)
+        var outFlights = [Double](repeating: flight, count: n)
+        var bows = [Double](repeating: -100, count: n)
+        var rank = [Int](repeating: 0, count: n)
         var coverRise = length + 1
         var outroEnd = length
+        var coverHolds = false
         // The last downbeat that leaves the end card time to hold.
         func lastDownbeat(before t: Double) -> Double {
             downbeats.last(where: { $0 <= t + 0.01 && $0 > introEnd + bar * 1.5 }) ?? t
+        }
+        /// A card's time to leave: by its voice, varied a little by Feel.
+        func leaving(_ c: Int, base: Double) -> Double {
+            base * (1 + 0.3 * feel * (unit(c, 0xF3) * 2 - 1))
         }
         let reverseOrder = landingOrder.reversed().map { $0 }
         switch kind {
@@ -447,23 +644,112 @@ public enum Choreographer {
             for (i, c) in reverseOrder.enumerated() {
                 let k = reverseOrder.count > 1 ? Double(i) / Double(reverseOrder.count - 1) : 0
                 leaves[c] = outroStart + bar * 0.25 + (span / q * k).rounded(.down) * q
+                rank[c] = i
             }
             coverRise = outroEnd - flight
+            coverHolds = true
         case .lightsOut:
             outroEnd = lastDownbeat(before: length - bar)
             outroStart = max(introEnd + bar, outroEnd - bar)
             let step = max(min(q, (outroEnd - outroStart) / Double(max(reverseOrder.count, 1))), 0.03)
             for (i, c) in reverseOrder.enumerated() {
                 leaves[c] = outroEnd - Double(reverseOrder.count - i) * step
+                rank[c] = i
             }
+        case .leave:
+            // The board empties the way it filled: the last to land leaves first, one slot a beat,
+            // counted back from the clip's last beat, which takes the cover. A board that was dealt
+            // empties in scattered order. With a cold open the cover stays and rises to meet frame 0.
+            let departing = builds ? reverseOrder : Self.scatterOrder(layout, seed: s.seed).filter { $0 != cover }
+            let m = departing.count
+            let total = position(length)
+            let lastBeat = (total - 1e-3).rounded(.down)
+            let budget = min(16, max(4, (total - position(introEnd)) * 0.3))
+            var stepOut = 0.25
+            let options = builds && buildStep > 0 ? [buildStep] + [1.0, 0.5, 0.25].filter { $0 < buildStep } : [1.0, 0.5, 0.25]
+            for f in options where Double(m) * f <= budget + 1e-6 {
+                stepOut = f
+                break
+            }
+            let slotsOut = max(1, min(m, Int((budget / stepOut + 1e-6).rounded(.down))))
+            for (j, c) in departing.enumerated() {
+                let slot = j * slotsOut / max(m, 1)
+                let x = lastBeat - Double(slotsOut - slot) * stepOut
+                leaves[c] = time(x) + 0.02 * feel * (unit(c, 0xF4) * 2 - 1)
+                rank[c] = j
+            }
+            if s.intro.coldOpen {
+                coverHolds = true
+                coverRise = time(lastBeat) - flight
+            } else {
+                leaves[cover] = time(lastBeat)
+                rank[cover] = m
+            }
+            for c in 0..<n {
+                let share = voices[c] == .low ? 0.75 : (voices[c] == .mid ? 0.5 : 1.0 / 3)
+                outFlights[c] = leaving(c, base: min(max(period * share, 0.18), 0.45))
+            }
+            outroStart = max(introEnd + bar * 0.5, (departing.map { leaves[$0] }.min() ?? length) - period)
+        case .curtainCall:
+            // A bow in a wave from the middle out over the second-last bar, one ring a beat; then
+            // in the last bar each slide leaves downwards in its own time, slowing like a
+            // ritardando. The cover rises to the front and takes the last bow on the final downbeat.
+            outroEnd = lastDownbeat(before: length - max(bar, 1.5))
+            outroStart = max(introEnd + bar, outroEnd - 2 * bar)
+            let rings = min(4, max(1, Int(((outroEnd - bar - outroStart) / period).rounded())))
+            let d = layout.distances(from: layout.cells[layout.centreCell].centre)
+            for c in 0..<n where c != cover {
+                bows[c] = time(position(outroStart) + Double(max(0, min(rings - 1, Int(d[c] * Float(rings) - 1e-3)))))
+            }
+            bows[cover] = outroEnd
+            // Bottom rows first, so a card leaving never drops across one still resting.
+            let departing = (0..<n).filter { $0 != cover }.sorted {
+                let a = layout.cells[$0].centre.y + Float(unit($0, 0xF5)) * layout.gap, b = layout.cells[$1].centre.y + Float(unit($1, 0xF5)) * layout.gap
+                return a != b ? a < b : $0 < $1
+            }
+            let m = departing.count
+            let from = outroEnd - bar, span = max(bar - 0.75, bar * 0.5)
+            for (j, c) in departing.enumerated() {
+                let k = m > 1 ? Double(j) / Double(m - 1) : 0
+                leaves[c] = from + span * pow(k, 1.5) + 0.025 * feel * (unit(c, 0xF6) * 2 - 1)
+                outFlights[c] = leaving(c, base: min(max(period * 1.2, 0.5), 0.8))
+                rank[c] = j
+            }
+            coverRise = outroEnd - bar
+            coverHolds = true
+        case .driftAway:
+            // Over the last two to four bars the slides lift away one by one, outside in, close
+            // together at first and further apart, like a breath out. The cover rises to the middle
+            // and stays, glowing.
+            let barsAway = n <= 12 ? 2 : (n <= 30 ? 3 : 4)
+            let target = length - Double(barsAway) * bar
+            outroStart = max(introEnd + bar, downbeats.min { abs($0 - target) < abs($1 - target) }.flatMap { abs($0 - target) < bar ? $0 : nil } ?? target)
+            outroEnd = length
+            let departing = (0..<n).filter { $0 != cover }.sorted {
+                let d0 = simdLength(layout.cells[$0].centre - layout.cells[cover].centre) + Float(unit($0, 0xF7)) * layout.gap * 2
+                let d1 = simdLength(layout.cells[$1].centre - layout.cells[cover].centre) + Float(unit($1, 0xF7)) * layout.gap * 2
+                return d0 != d1 ? d0 > d1 : $0 < $1
+            }
+            let m = departing.count
+            let last = max(outroStart, length - bar - 1.2)
+            for (j, c) in departing.enumerated() {
+                let k = m > 1 ? Double(j) / Double(m - 1) : 0
+                leaves[c] = outroStart + (last - outroStart) * pow(k, 1.7)
+                outFlights[c] = 1.8 + 0.8 * unit(c, 0xF8)
+                rank[c] = j
+            }
+            coverRise = outroStart + (last - outroStart) * 0.55
+            coverHolds = true
         default:
             break
         }
-        let outro = OutroPlan(kind: kind, start: outroStart, leaves: leaves, flight: flight, coverRise: coverRise, end: outroEnd,
-                              fade: max(q * 2, 0.12))
+        let outro = OutroPlan(kind: kind, start: outroStart, leaves: leaves, flight: flight, flights: outFlights, bows: bows, rank: rank,
+                              coverRise: coverRise, end: outroEnd, fade: max(q * 2, 0.12), coverHolds: coverHolds)
 
         // MARK: Drops and the mode's gain over the clip
-        let drops = s.drops ? song.drops.map { $0 - start }.filter { $0 > introEnd + bar * 0.5 && $0 < outroStart - period } : []
+        var drops = s.drops ? song.drops.map { $0 - start }.filter { $0 > introEnd + bar * 0.5 && $0 < outroStart - period } : []
+        // A build that lands on the song's drop hits it like any other drop.
+        if s.drops, let d = buildDrop { drops.insert(d, at: 0) }
         // What each drop does. A weave needs the whole bar before it clear of
         // the intro; a shape needs to be home a bar later (two, for a quick
         // bar) before the ending or the next drop. Otherwise it lights.
@@ -490,11 +776,17 @@ public enum Choreographer {
         }
         func modeGain(_ t: Double) -> Float {
             var g: Float = 1
-            let rampIn = introEnd * 0.25
-            if t < introEnd - rampIn { return 0 }
-            if t < introEnd { g = Float((t - (introEnd - rampIn)) / max(rampIn, 1e-3)) }
+            if builds {
+                // A build hands over to the music on its last landing, over a beat.
+                if t < introEnd - 0.02 { return 0 }
+                g = min(1, Float((t - introEnd + 0.02) / max(period, 0.2)))
+            } else {
+                let rampIn = introEnd * 0.25
+                if t < introEnd - rampIn { return 0 }
+                if t < introEnd { g = Float((t - (introEnd - rampIn)) / max(rampIn, 1e-3)) }
+            }
             if kind != .none, t > outroStart {
-                g *= max(0, 1 - Float((t - outroStart) / (kind == .loop ? bar : bar * 0.5)))
+                g *= max(0, 1 - Float((t - outroStart) / (kind.loops ? bar : bar * 0.5)))
             }
             // Through the breath before a drop, less happens.
             for d in drops where t < d && t > d - bar { g *= 0.6 }
@@ -518,7 +810,8 @@ public enum Choreographer {
             case .melody: return [.mid]
             }
         }()
-        let modeOnsets = onsets.filter { registers.contains($0.register) && $0.time > introEnd * 0.7 && $0.time < length }
+        let modeFrom = builds ? introEnd - 0.02 : introEnd * 0.7
+        let modeOnsets = onsets.filter { registers.contains($0.register) && $0.time > modeFrom && $0.time < length }
         let threshold: Float = 0.55 - 0.45 * S
 
         /// The least recently lit cells, spread apart: farthest-point picks.
@@ -546,7 +839,7 @@ public enum Choreographer {
             return chosen
         }
 
-        let modeBeats = clipBeats.map { (b: $0, t: $0.time - start) }.filter { $0.t > introEnd * 0.7 && $0.t < length }
+        let modeBeats = clipBeats.map { (b: $0, t: $0.time - start) }.filter { $0.t > modeFrom && $0.t < length }
         let barIndex: (Double) -> Int = { t in Int(((t - firstDown) / bar).rounded(.down)) }
 
         switch s.mode {
@@ -670,6 +963,52 @@ public enum Choreographer {
         case .equaliser:
             break
 
+        case .voices:
+            // Each onset lights the next slides of its own voice, in the order they landed, so a
+            // group walks rather than flashing as one: a kick one to three (half the low group
+            // on a loud downbeat), a snare one or two, a hat a glint.
+            var groups: [Register: [Int]] = [:]
+            for c in intro.order { groups[intro.voices[c], default: []].append(c) }
+            var pointer: [Register: Int] = [:]
+            func next(_ r: Register, _ k: Int, at t: Double, avoid: Double) -> [Int] {
+                guard let pool = groups[r], !pool.isEmpty else { return pick(k, at: t, avoid: avoid) }
+                var out: [Int] = []
+                var p = pointer[r] ?? 0
+                var tried = 0
+                while out.count < k, tried < pool.count {
+                    let c = pool[p % pool.count]
+                    p += 1
+                    tried += 1
+                    if t - lastLit[c] > avoid { out.append(c) }
+                }
+                pointer[r] = p
+                return out
+            }
+            var lastGlint = -10.0
+            for o in modeOnsets where o.strength >= threshold {
+                let g = modeGain(o.time)
+                guard g > 0.01 else { continue }
+                switch o.register {
+                case .low:
+                    let loudDown = o.strength > 0.6 && loudness(o.time) > 0.55 && downbeats.contains { abs($0 - o.time) < 0.07 }
+                    let k = loudDown ? max(1, (groups[.low]?.count ?? 2) / 2) : min(3, 1 + Int(o.strength * 2.2))
+                    for c in next(.low, k, at: o.time, avoid: period * 0.45) { add(c, o.time, (0.55 + 0.45 * o.strength) * g) }
+                case .mid:
+                    for c in next(.mid, o.strength > 0.7 ? 2 : 1, at: o.time, avoid: period * 0.45) {
+                        // A snare slide flicks away from the middle.
+                        let away = layout.cells[c].centre - layout.safeCentre
+                        let lean = SIMD2<Float>(away.x >= 0 ? 1 : -1, 0)
+                        add(c, o.time, (0.5 + 0.45 * o.strength) * g, lean: lean)
+                    }
+                case .high:
+                    guard o.time - lastGlint >= period / 2 else { continue }
+                    lastGlint = o.time
+                    for c in next(.high, 1, at: o.time, avoid: period * 0.5) {
+                        add(c, o.time, (0.3 + 0.2 * o.strength) * g, hold: 0.05, release: 0.18, glint: true)
+                    }
+                }
+            }
+
         case .readThrough:
             // One pass of the deck fills a four-bar phrase: the longest of a
             // beat, a half or a quarter that fits, never quicker than 110 ms.
@@ -747,7 +1086,8 @@ public enum Choreographer {
             var falling = Expiries()
             var stamp = [Int](repeating: -1, count: n)
             // The light is past half a little before its trigger, so a cell counts from there.
-            let lead = max(s.motion.attack, 0.001) * 0.7
+            // (Voices lights more at once, so it counts from where a full-strength light passes half.)
+            let lead = max(s.motion.attack, 0.001) * (s.mode == .voices ? 0.9 : 0.7)
             var i = 0
             while i < all.count {
                 // A ripple's ring reaches cells at one distance together: all of
@@ -798,11 +1138,41 @@ public enum Choreographer {
         }
 
         // MARK: The intro lights each card as it lands; drops light everything.
+        if builds {
+            // Echoes: once a slide has landed, later sounds in its voice light it again, gently.
+            // The pattern of the song becomes the pattern of the board as it grows.
+            var lastEcho: [Register: Double] = [:]
+            var echoed = [Double](repeating: -100, count: n)
+            for o in onsets where o.time > buildStart && o.time < introEnd - 0.05 && o.strength >= threshold * 0.9 {
+                guard o.time - (lastEcho[o.register] ?? -10) >= period * 0.45 else { continue }
+                let group = (0..<n).filter { voices[$0] == o.register && landings[$0] < o.time - 0.08 && !(s.intro.coldOpen && $0 == cover) }
+                guard !group.isEmpty else { continue }
+                lastEcho[o.register] = o.time
+                let k = max(1, Int((Double(group.count) * 0.3).rounded()))
+                for c in group.sorted(by: { (echoed[$0], landings[$0]) < (echoed[$1], landings[$1]) }).prefix(k) {
+                    echoed[c] = o.time
+                    if o.register == .high {
+                        add(c, o.time, 0.25 + 0.2 * o.strength, hold: 0.04, release: 0.16, glint: true)
+                    } else {
+                        add(c, o.time, 0.3 + 0.25 * o.strength, hold: 0, release: release * 0.6)
+                    }
+                }
+            }
+        }
         for c in 0..<n {
             // The cover lands last and fullest: the music takes over from it.
-            add(c, landings[c], s.intro.coldOpen && c == cover ? 1 : 0.8)
+            add(c, landings[c], (s.intro.coldOpen || builds) && c == cover ? 1 : 0.8)
             // Then the whole grid takes a breath of light as the mode starts.
             if c != cover || !s.intro.coldOpen, introEnd - landings[c] > 0.05 { add(c, introEnd, 0.5) }
+        }
+        // Each slide lights as it leaves on its beat, and as it bows.
+        switch kind {
+        case .leave:
+            for c in 0..<n where outro.leaves[c] < length { add(c, outro.leaves[c], 0.6, hold: 0, release: release * 0.7) }
+        case .curtainCall:
+            for c in 0..<n where outro.bows[c] > 0 { add(c, outro.bows[c], c == cover ? 1 : 0.55, hold: period * 0.25, release: release) }
+        default:
+            break
         }
         let dropOrder = layout.distances(from: layout.cells[layout.centreCell].centre)
         for d in drops {
@@ -932,6 +1302,8 @@ public enum Choreographer {
             mean /= 8
             if mean > 0.6 { punches.append((d, 0.015)) }
         }
+        // A kick landing in a build gives the camera a little push, so you feel it land.
+        if builds { for c in 0..<n where c != cover && voices[c] == .low { punches.append((landings[c], 0.006)) } }
         for d in drops { punches.removeAll { abs($0.time - d) < 0.1 }; punches.append((d, 0.03)) }
         for m in moments where m.move.reforms { punches.removeAll { abs($0.time - m.home) < 0.1 }; punches.append((m.home, 0.02)) }
         punches.sort { $0.time < $1.time }
@@ -942,6 +1314,11 @@ public enum Choreographer {
                         reach: reach, attack: max(s.motion.attack, 0.001), features: features, firstSlide: first, swaps: swaps,
                         flipTime: flipTime, levels: levels, peaks: peaks, drops: drops, moments: moments, punches: punches, pulse: pulse, loud: loud,
                         intro: intro, outro: outro, beats: beatTimes, downbeats: downbeats)
+    }
+
+    /// Bars for a build of `cells` cards with a slide on every beat after the first: two to eight.
+    public static func buildBars(cells: Int) -> Int {
+        min(max(Int((Double(cells + 1) / 4).rounded(.up)), 2), 8)
     }
 
     /// When each cell lands in the intro, as a rank 0 (first) … 1 (last).
@@ -967,9 +1344,42 @@ public enum Choreographer {
         case .random:
             let perm = rng.shuffled(n)
             raw = perm.map { Float($0) }
+        case .scatter:
+            let order = scatterOrder(layout, seed: UInt32(truncatingIfNeeded: rng.next()))
+            raw = [Float](repeating: 0, count: n)
+            for (i, c) in order.enumerated() { raw[c] = Float(i) }
         }
         let lo = raw.min() ?? 0, hi = raw.max() ?? 1
         return raw.map { hi > lo ? ($0 - lo) / (hi - lo) : 0 }
+    }
+
+    /// The cells in a scattered order: each as far as it can be from those before it and from
+    /// the one just placed, from a seeded start, so the board fills evenly at every moment
+    /// and never in reading order.
+    static func scatterOrder(_ layout: GridLayout, seed: UInt32) -> [Int] {
+        let n = layout.count
+        guard n > 1 else { return Array(0..<n) }
+        var rng = Seeded(seed, salt: 0x5CA7)
+        let centres = layout.cells.map(\.centre)
+        let diagonal = max(simdLength(layout.gridSize), 1e-5)
+        var remaining = Array(0..<n)
+        var order = [remaining.remove(at: Int(rng.next() % UInt64(n)))]
+        var nearest = remaining.map { simdLength(centres[$0] - centres[order[0]]) }
+        let jitter = (0..<n).map { _ in rng.unit() * 0.05 }
+        while !remaining.isEmpty {
+            let last = centres[order[order.count - 1]]
+            var best = 0, bestScore: Float = -1
+            for j in remaining.indices {
+                let c = remaining[j]
+                let score = (nearest[j] + 0.6 * simdLength(centres[c] - last)) / diagonal + jitter[c]
+                if score > bestScore { bestScore = score; best = j }
+            }
+            let c = remaining.remove(at: best)
+            nearest.remove(at: best)
+            order.append(c)
+            for j in remaining.indices { nearest[j] = min(nearest[j], simdLength(centres[remaining[j]] - centres[c])) }
+        }
+        return order
     }
 
     static func avgLast(_ layout: GridLayout, _ last: [Double], row: Int? = nil, column: Int? = nil) -> Double {

@@ -178,6 +178,7 @@ struct BeatPage: View {
         case .equaliser: return "EQ"
         case .readThrough: return "Read"
         case .lightsOn: return "Lights"
+        case .voices: return "Voices"
         }
     }
 }

@@ -8,7 +8,8 @@ import StageKit
 public struct ClipRange: Hashable, Sendable {
     public var start: Double
     public var length: Double
-    /// The ending, with Auto settled: Loop for 30 seconds or less, Close otherwise.
+    /// The ending, with Auto settled: Loop for 30 seconds or less, Close otherwise
+    /// (for a board that builds on the beat, Leave on the beat and Curtain call).
     public var outro: Outro
 
     public init(start: Double, length: Double, outro: Outro) {
@@ -21,7 +22,8 @@ public struct ClipRange: Hashable, Sendable {
 public extension Clip {
     /// The clip in `song`: it starts on a downbeat after any silence, lands the
     /// intro on an early drop when asked, and a loop runs whole bars.
-    func resolve(_ a: SongAnalysis, settings s: BeatSettings, landOnDrop: Bool = true) -> ClipRange {
+    /// `cells` is how many cards the board holds, which sizes a build.
+    func resolve(_ a: SongAnalysis, settings s: BeatSettings, landOnDrop: Bool = true, cells: Int? = nil) -> ClipRange {
         let freeTime = a.confidence < 0.4 || a.tempo <= 0
         let period = a.tempo > 0 ? 60 / a.tempo : 0.5
         let bar = period * 4
@@ -32,16 +34,19 @@ public extension Clip {
             guard !freeTime, let d = downs.min(by: { abs($0 - t) < abs($1 - t) }), abs(d - t) < bar * 0.5 else { return t }
             return d
         }
-        let intro = Double(Composer.introBars(s, bar: bar)) * bar
+        let builds = s.intro.pace.builds
+        let intro = Double(Composer.introBars(s, bar: bar, cells: cells)) * bar
         var start: Double
         var seconds: Double
         if let want = length.seconds, want < end - begin - 0.5 {
             seconds = want
-            start = snap(bestPart ? a.bestSection(length: want, lead: intro) : self.start)
-            // The cover lands on a drop that comes early in the clip.
-            if landOnDrop, !freeTime, s.intro.coldOpen,
-               let d = a.drops.first(where: { $0 > start + intro * 0.5 && $0 < start + 8 * bar }), d - intro >= begin - 0.02 {
-                start = d - intro
+            // A build needs four bars or more to land on a drop.
+            let lead = builds ? max(intro, 4 * bar) : intro
+            start = snap(bestPart ? a.bestSection(length: want, lead: lead) : self.start)
+            // The cover lands on a drop that comes early in the clip; a build completes on it.
+            if landOnDrop, !freeTime, s.intro.coldOpen || builds,
+               let d = a.drops.first(where: { $0 > start + lead * 0.5 && $0 < start + 8 * bar + (builds ? lead : 0) }), d - lead >= begin - 0.02 {
+                start = d - lead
             }
             start = min(max(start, 0), max(0, a.duration - seconds))
         } else {
@@ -50,9 +55,9 @@ public extension Clip {
             seconds = end - start
         }
         var outro = s.outro
-        if outro == .auto { outro = seconds <= 30.5 ? .loop : .close }
+        if outro == .auto { outro = seconds <= 30.5 ? (builds ? .leave : .loop) : (builds ? .curtainCall : .close) }
         // A loop runs whole bars, so its last frame meets its first on the beat.
-        if outro == .loop, !freeTime, bar > 0.2 {
+        if outro.loops, !freeTime, bar > 0.2 {
             var bars = max(2, Int((seconds / bar).rounded()))
             while bars > 2, start + Double(bars) * bar > a.duration + 0.01 { bars -= 1 }
             seconds = Double(bars) * bar
@@ -67,8 +72,10 @@ public extension Clip {
 /// Builds what the stage draws, for the app and the lab alike.
 public enum Composer {
     /// Intro length in bars: as set, or the fewest of 1, 2 or 4 that last 1.6 s.
-    public static func introBars(_ s: BeatSettings, bar: Double) -> Int {
+    /// A build takes a bar for every four cards, two to eight bars.
+    public static func introBars(_ s: BeatSettings, bar: Double, cells: Int? = nil) -> Int {
         if s.intro.bars > 0 { return s.intro.bars }
+        if s.intro.pace.builds { return Choreographer.buildBars(cells: cells ?? s.grid.cellCount) }
         var bars = 1
         while bars < 4, Double(bars) * bar < 1.6 { bars *= 2 }
         return bars
@@ -82,11 +89,12 @@ public enum Composer {
     }
 
     /// The choreography for a clip of `song` on a canvas of `aspect`.
+    /// `aspects` are the slides' own shapes, for a collage.
     public static func plan(_ a: SongAnalysis, settings: BeatSettings, clip: ClipRange, aspect: Float, slideAspect: Float,
-                            slides: Int, starred: Set<Int> = [], clear: Clearance = .none) -> (layout: GridLayout, plan: BeatPlan) {
+                            slides: Int, aspects: [Float] = [], starred: Set<Int> = [], clear: Clearance = .none) -> (layout: GridLayout, plan: BeatPlan) {
         var s = settings
         s.outro = clip.outro
-        let layout = GridLayout(settings: s.grid, aspect: aspect, slideAspect: slideAspect, clear: clear)
+        let layout = GridLayout(settings: s.grid, aspect: aspect, slideAspect: slideAspect, aspects: aspects, clear: clear)
         let plan = Choreographer.plan(a, settings: s, layout: layout, slides: slides, clipStart: clip.start, clipLength: clip.length,
                                       starred: starred)
         return (layout, plan)

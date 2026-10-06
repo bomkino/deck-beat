@@ -217,13 +217,23 @@ public struct BeatScene: StageScene {
 
         // A spring after each hit: size and lift overshoot, then settle.
         var spring: Float = 0
+        // Voices: a kick slide thumps (a stronger spring and a push back), a snare slide flicks.
+        let voice = c < plan.intro.voices.count ? plan.intro.voices[c] : .low
+        let voiced = s.mode == .voices
+        var thump: Float = 0, flick: Float = 0
         if light.since < 0.6 {
             let x = Float(light.since)
             spring = light.last * expf(-x / 0.09) * sinf(2 * .pi * x / 0.2) / 0.574
+            if voiced, voice == .low {
+                spring *= 1.6
+                thump = light.last * expf(-x / 0.06)
+            } else if voiced, voice == .mid {
+                flick = light.last * expf(-x / 0.1) * cosf(2 * .pi * x / 0.28)
+            }
         }
         let bounce = s.motion.bounce
         var scale = mix(rest.scale, lit.scale, L) + (lit.scale - rest.scale) * bounce * spring
-        var lift = mix(rest.lift, lit.lift, L) + (lit.lift - rest.lift) * bounce * spring
+        var lift = mix(rest.lift, lit.lift, L) + (lit.lift - rest.lift) * bounce * spring - 0.012 * thump
         var bright = mix(rest.brightness * (1 - 0.25 * inhale), lit.brightness, e7)
         let colour = mix(rest.colour, lit.colour, e7)
         let glow = mix(rest.glow, lit.glow, e2) + light.glint * 0.35
@@ -250,6 +260,9 @@ public struct BeatScene: StageScene {
         var roll: Float = 0
         let idle = s.motion.idleAmount * (1 - L)
         if idle > 0.001 {
+            // With Feel, each card idles at its own pace.
+            let rate = 1 + 0.25 * min(max(s.motion.feel, 0), 1) * (hash(c, 79) * 2 - 1)
+            let beat = beat * Double(rate)
             let phase = 2 * Float.pi * Float(beat / 8) - 2 * .pi * Float(c) / Float(max(layout.count, 1))
             switch s.motion.idle {
             case .breathe:
@@ -287,6 +300,15 @@ public struct BeatScene: StageScene {
             let a = hash(c, 5) * 2 * .pi
             lean = SIMD2(cosf(a), sinf(a))
         }
+        // Loose: each card a little turned, off its mark and smaller, as if pasted up by hand.
+        if s.loose > 0.001 {
+            let k = min(s.loose, 1)
+            roll += (hash(c, 81) * 2 - 1) * 6 * .pi / 180 * k
+            let room = layout.gap * 0.5 + 0.05 * min(geometry.size.x, geometry.size.y)
+            offset += SIMD2(hash(c, 83) * 2 - 1, hash(c, 85) * 2 - 1) * room * k
+            size *= 1 - 0.06 * k * hash(c, 87)
+        }
+        roll += flick * lean.x * 5 * .pi / 180
         var rotation = layout.wallRotation + SIMD3(-tilt * lean.y, tilt * lean.x, roll)
         var position = layout.place(SIMD3(geometry.centre.x + offset.x, geometry.centre.y + offset.y, 0))
         position.z += lift
@@ -513,30 +535,209 @@ public struct BeatScene: StageScene {
                   ctx: SceneContext, real: Double) -> [CardPose] {
         let intro = plan.intro
         let outro = plan.outro
-        // Close: leaving in reverse, the cover rising to hold the end.
-        if outro.kind == .close, !reverse {
-            if c == intro.coverCell, real > outro.coverRise {
-                let p = Float(min(1, (real - outro.coverRise) / outro.flight))
-                return [coverHero(card, geometry: geometry, amount: Ease.place(p), kick: kick, push: Float((real - outro.coverRise) / 3), ctx: ctx)]
-            }
-            let leave = outro.leaves[c]
-            if real >= leave {
-                let p = Float((real - leave) / outro.flight)
-                if p >= 1 { return [] }
-                return flight(card, c: c, geometry: geometry, progress: 1 - p, ctx: ctx)
+        let isCover = c == intro.coverCell
+        var card = card
+        if !reverse {
+            switch outro.kind {
+            case .close:
+                // Leaving in reverse, the cover rising to hold the end.
+                if isCover, real > outro.coverRise {
+                    let p = Float(min(1, (real - outro.coverRise) / outro.flight))
+                    return [coverHero(card, geometry: geometry, amount: Ease.place(p), kick: kick, push: Float((real - outro.coverRise) / 3), ctx: ctx)]
+                }
+                let leave = outro.leaves[c]
+                if real >= leave {
+                    let p = Float((real - leave) / outro.flight)
+                    if p >= 1 { return [] }
+                    return flight(card, c: c, geometry: geometry, progress: 1 - p, ctx: ctx)
+                }
+            case .leave:
+                // Emptying the way it filled; with a cold open the cover rises to meet frame 0.
+                if isCover, outro.coverHolds, real > outro.coverRise {
+                    let p = Float(min(1, (real - outro.coverRise) / max(outro.flight, 0.1)))
+                    return [coverHero(card, geometry: geometry, amount: Ease.place(p), kick: 0, push: 0, ctx: ctx)]
+                }
+                let leave = outro.leaves[c]
+                if real >= leave - 0.15 { return departure(card, c: c, geometry: geometry, since: real - leave, flight: outro.flights[c]) }
+            case .curtainCall:
+                if isCover {
+                    // The cover steps forward, takes the last bow on the final downbeat, and holds.
+                    if real > outro.coverRise {
+                        let rise = min(plan.period * 3, 1.4)
+                        let p = Float(min(1, (real - outro.coverRise) / rise))
+                        let hero = coverHero(card, geometry: geometry, amount: Ease.place(p), kick: kick * (1 - p), push: 0, ctx: ctx)
+                        return [bowed(hero, c: c, since: real - outro.end, depth: 1)]
+                    }
+                } else {
+                    card = bowed(card, c: c, since: real - outro.bows[c], depth: 0.8)
+                    let leave = outro.leaves[c]
+                    if real >= leave - 0.12 { return curtainExit(card, c: c, since: real - leave, flight: outro.flights[c]) }
+                }
+            case .driftAway:
+                if isCover {
+                    // The cover rises to the middle and stays, glowing faintly and growing over the last bar.
+                    if real > outro.coverRise {
+                        let p = Float(min(1, (real - outro.coverRise) / 1.6))
+                        var hero = coverHero(card, geometry: geometry, amount: Ease.inOutCubic(p), kick: kick * (1 - p), push: 0, ctx: ctx)
+                        let grow = Ease.smooth(Float((real - (plan.length - plan.period * 4)) / (plan.period * 4)))
+                        hero.size *= 1 + 0.03 * grow
+                        hero.glow += 0.03 + 0.09 * grow
+                        hero.corner = corner(for: hero.size)
+                        return [hero]
+                    }
+                } else if real >= outro.leaves[c] {
+                    return drift(card, c: c, since: real - outro.leaves[c], flight: outro.flights[c])
+                }
+            default:
+                break
             }
         }
-        if t >= intro.end { return [card] }
-        if intro.coldOpen, c == intro.coverCell {
+        if intro.coldOpen, isCover, t < intro.end {
             // Frame 0 is the cover, large and lit; it goes back to its cell as the grid arrives.
             let p: Float = t < intro.coverMove ? 0 : Float((t - intro.coverMove) / max(intro.end - intro.coverMove, 1e-3))
             return [coverHero(card, geometry: geometry, amount: 1 - Ease.place(p), kick: kick, push: Float(t / max(intro.coverMove, 0.3)), ctx: ctx)]
         }
         let land = intro.landings[c]
-        let begin = land - intro.flight
+        // By sound: a kick slide lands with a squash, a hat slide with a glint.
+        if settings.intro.entrance == .voices, t >= land, t - land < 0.2, !(intro.coldOpen && isCover) {
+            card = landed(card, c: c, since: Float(t - land))
+        }
+        if t >= intro.end { return [card] }
+        let flightTime = c < intro.flights.count ? intro.flights[c] : intro.flight
+        let begin = land - flightTime
         if t < begin { return [] }
         if t >= land { return [card] }
-        return flight(card, c: c, geometry: geometry, progress: Float((t - begin) / intro.flight), ctx: ctx)
+        return flight(card, c: c, geometry: geometry, progress: Float((t - begin) / flightTime), ctx: ctx)
+    }
+
+    /// The moment after a slide comes in by sound: a kick slide squashes 6 % and recovers in a
+    /// tenth of a second; a hat slide catches a glint.
+    func landed(_ card: CardPose, c: Int, since x: Float) -> CardPose {
+        var card = card
+        switch plan.intro.voices[c] {
+        case .low:
+            let k = 0.06 * (1 - Ease.smooth(x / 0.1))
+            let h = card.size.y
+            card.size.y *= 1 - k
+            card.size.x *= 1 + k * 0.5
+            card.position.y -= h * k * 0.5
+        case .high:
+            card.glow += 0.45 * expf(-x / 0.08)
+        case .mid:
+            break
+        }
+        return card
+    }
+
+    /// A card leaving on its beat the way its sound does: a kick slide gathers a little, then
+    /// drops away with a turn that lags behind; a snare slide flicks out sideways; a hat slide
+    /// pops off, shrinking with a glint. `since` is the time since its beat; before it, it gathers.
+    func departure(_ card: CardPose, c: Int, geometry: GridLayout.Cell, since x: Double, flight: Double) -> [CardPose] {
+        var card = card
+        let voice = plan.intro.voices[c]
+        let vary = 1 + 0.3 * min(max(settings.motion.feel, 0), 1) * (hash(c, 91) * 2 - 1)
+        let side: Float = geometry.centre.x >= 0 ? 1 : -1
+        card.layer = 2 + Float(plan.outro.rank[c]) * 0.001
+        if x < 0 {
+            // Anticipation, over the moment before the beat.
+            let a = Ease.smooth(Float((x + 0.15) / 0.15))
+            switch voice {
+            case .low:
+                card.position.y += 0.008 * a
+                card.position.z += 0.01 * a
+            case .mid:
+                card.position.x -= side * 0.008 * a
+                card.rotation.z += side * 0.03 * a
+            case .high:
+                card.size *= 1 + 0.04 * a
+            }
+            return [card]
+        }
+        let p = Float(x / max(flight, 0.05))
+        if p >= 1 { return [] }
+        switch voice {
+        case .low:
+            // A fall that gathers speed; the turn lags behind it.
+            let e = p * p
+            let lag = max(0, p - 0.2) / 0.8
+            card.position.y += 0.008 * (1 - Ease.outCubic(p * 4)) - e * (card.position.y + 0.5 + card.size.y)
+            card.position.z -= e * 0.08
+            card.rotation.x += lag * lag * 0.8 * vary
+            card.rotation.z += side * lag * lag * 0.3 * vary
+            card.opacity *= 1 - Ease.smooth((p - 0.7) / 0.3)
+        case .mid:
+            let e = powf(p, 2.2)
+            card.position.x += side * e * (geometry.size.x * 2.5 + 0.15)
+            card.rotation.z -= side * e * 0.35 * vary
+            card.rotation.y += side * e * 0.5
+            card.opacity *= 1 - Ease.smooth((p - 0.55) / 0.45)
+        case .high:
+            let k: Float = p < 0.25 ? 1 + 0.12 * Ease.outCubic(p / 0.25) : 1.12 * (1 - powf((p - 0.25) / 0.75, 2))
+            card.size *= max(k, 0.001)
+            card.glow += 0.6 * sinf(.pi * min(p * 1.5, 1))
+            card.opacity *= 1 - Ease.smooth((p - 0.75) / 0.25)
+        }
+        card.shadow *= 1 - p
+        card.corner = corner(for: card.size)
+        return [card]
+    }
+
+    /// A bow: a small rise, a forward tip peaking on the beat, and back up with a
+    /// little overshoot, exactly square again half a second later.
+    func bowed(_ card: CardPose, c: Int, since x: Double, depth: Float) -> CardPose {
+        guard x > -0.45, x < 0.5 else { return card }
+        var card = card
+        let vary = 1 + 0.3 * min(max(settings.motion.feel, 0), 1) * (hash(c, 93) * 2 - 1)
+        let rise = x < -0.2 ? Ease.smooth(Float((x + 0.45) / 0.25)) : 1 - Ease.smooth(Float((x + 0.2) / 0.4))
+        let tip: Float = x < 0 ? Ease.inOutCubic(Float((x + 0.3) / 0.3)) : 1 - back(Float(x / 0.5), 1.2)
+        let d = depth * vary
+        card.position.z += 0.012 * rise * d
+        card.position.y += 0.005 * rise * d - 0.012 * tip * d
+        card.rotation.x += 0.38 * tip * d
+        card.glow += 0.12 * max(tip, 0) * d
+        return card
+    }
+
+    /// A card leaving downwards in a curtain call, gathering speed, tipping back as it goes.
+    func curtainExit(_ card: CardPose, c: Int, since x: Double, flight: Double) -> [CardPose] {
+        var card = card
+        card.layer = 2 + Float(plan.outro.rank[c]) * 0.001
+        if x < 0 {
+            card.position.y += 0.006 * Ease.smooth(Float((x + 0.12) / 0.12))
+            return [card]
+        }
+        let p = Float(x / max(flight, 0.05))
+        if p >= 1 { return [] }
+        let e = p * p
+        card.position.y += 0.006 * (1 - Ease.outCubic(p * 4)) - e * (card.position.y + 0.5 + card.size.y)
+        card.rotation.x -= e * 0.45
+        card.rotation.z += (hash(c, 95) * 2 - 1) * 0.25 * e
+        card.opacity *= 1 - Ease.smooth((p - 0.75) / 0.25)
+        card.shadow *= 1 - p
+        return [card]
+    }
+
+    /// A card lifting away like paper in a draught: rising and leaning out on a slow sway,
+    /// turning gently, receding and softening until it is gone.
+    func drift(_ card: CardPose, c: Int, since x: Double, flight: Double) -> [CardPose] {
+        var card = card
+        card.layer = 2 + Float(plan.outro.rank[c]) * 0.001
+        let p = Float(x / max(flight, 0.05))
+        if p >= 1 { return [] }
+        let up = Ease.inOutCubic(p)
+        let dir: Float = card.position.x >= layout.safeCentre.x ? 1 : -1
+        let sway = sinf(2 * .pi * p * 1.2 + hash(c, 101) * 2 * .pi) - sinf(hash(c, 101) * 2 * .pi)
+        card.position.y += up * 0.32
+        card.position.x += dir * up * 0.1 + sway * 0.025 * Ease.smooth(p * 3)
+        card.position.z -= up * 0.3
+        card.rotation.z += sway * 0.1 * Ease.smooth(p * 3) + dir * up * 0.2
+        card.rotation.y += dir * up * 0.35
+        card.blur += up * 10
+        card.opacity *= 1 - Ease.smooth((p - 0.3) / 0.7)
+        card.shadow *= 1 - up
+        let soft = 1 - 0.3 * up
+        card.color = SIMD4(card.color.x * soft, card.color.y * soft, card.color.z * soft, card.color.w)
+        return [card]
     }
 
     /// The cover between its cell (0) and held up large (1).
@@ -631,6 +832,36 @@ public struct BeatScene: StageScene {
             page.curl = 0.5 * sinf(.pi * p) * (1 - p)
             page.opacity *= min(1, p / 0.12)
             return [page]
+        case .voices:
+            // Each comes in the way its sound does, landing exactly on its slot.
+            let feel = min(max(settings.motion.feel, 0), 1)
+            let vary = 1 + 0.3 * feel * (hash(c, 97) * 2 - 1)
+            switch plan.intro.voices[c] {
+            case .low:
+                // Falls in from just above and in front, gathering speed; its shadow firms as it nears.
+                let e = p * p
+                card.position.y += (1 - e) * 0.16 * vary
+                card.position.z += (1 - e) * 0.12
+                card.position.x += sinf(.pi * p) * 0.02 * feel * side
+                card.rotation.x += (1 - e) * 0.15 * vary
+                card.shadow *= 0.4 + 0.6 * e
+                fade(0.12)
+            case .mid:
+                // Snaps in from the side its cell is nearer, turning a little, with a 10 % overshoot.
+                let toward: Float = geometry.centre.x >= 0 ? 1 : -1
+                let e = back(p, 1.7 * vary)
+                card.position.x += toward * (1 - e) * (geometry.size.x * 1.5 + 0.02)
+                card.position.y += sinf(.pi * p) * 0.015 * feel
+                card.rotation.z += toward * (1 - e) * 7 * .pi / 180 * vary
+                fade(0.15)
+            case .high:
+                // Pops up from 40 % with a quick overshoot.
+                let e = back(p, 2.2 * vary)
+                card.size *= max(0.4 + 0.6 * e, 0.05)
+                card.position.z += (1 - Ease.outCubic(p)) * 0.02
+                card.glow += 0.3 * (1 - p)
+                fade(0.1)
+            }
         case .weave:
             // Threads slide in from either side and knit together.
             let k = threads(for: card)
