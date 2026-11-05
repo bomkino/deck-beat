@@ -143,5 +143,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: deck-beat-lab
+          retention-days: ${{ job.status == 'success' && 7 || 14 }}
           path: lab-output
           if-no-files-found: ignore
